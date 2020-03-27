@@ -25,7 +25,7 @@ MEMORY
   /* We don't really have FLASH and RAM, just DDR
      but we keep the two segments to compatibility with cortex-m-rt */
   m_interrupts (RX)  : ORIGIN = 0x00000000, LENGTH = 0x00000298
-  FLASH        (RWX) : ORIGIN = 0x10000000, LENGTH = 282K
-  RAM          (RW)  : ORIGIN = 0x10046800, LENGTH = 64K
-  IPC_DATA     (RW)  : ORIGIN = 0x10056800, LENGTH = 32K
+  FLASH        (RWX) : ORIGIN = 0x10000000, LENGTH = 64K
+  RAM          (RW)  : ORIGIN = 0x10020000, LENGTH = 64K
+  IPC_DATA     (RW)  : ORIGIN = 0x10040000, LENGTH = 32K
 }

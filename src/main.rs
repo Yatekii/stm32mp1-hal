@@ -14,7 +14,7 @@ fn main() -> ! {
         unsafe {
             &(*target::GPIOD::ptr())
                 .gpiox_pupdr
-                .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b00 << offset)));
+                .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
             &(*target::GPIOD::ptr())
                 .gpiox_otyper
                 .modify(|r, w| w.bits(r.bits() & !(0b1 << i)));
