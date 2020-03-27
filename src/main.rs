@@ -16,7 +16,7 @@ fn main() -> ! {
             .write(|w| w.hsemen().set_bit());
         &(*target::RCC::ptr())
             .rcc_mc_ahb4ensetr
-            .write(|w| w.gpioeen().set_bit());
+            .write(|w| w.gpioden().set_bit());
 
         &(*target::GPIOD::ptr())
             .gpiox_pupdr
