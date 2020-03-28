@@ -138,11 +138,11 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
         /// section. Ideally we'd just take the address of our buffer
         /// but that's now allowed in a static variable definition.
 //        da: 0x10056800,
-        da: 0x10058000,
+        da: 0x10044000,
         len: 0x8000,
         reserved: 0,
         name: rt::String32 {
-            buffer: *b"cm4_log\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+            buffer: *b"Hellau from Roest\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
         },
     },
 };

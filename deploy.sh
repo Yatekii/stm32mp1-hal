@@ -1,3 +1,4 @@
+arm-none-eabi-objcopy --remove-section .tracebuffer target/thumbv7em-none-eabihf/debug/stm32mp1-hal
 ssh root@192.168.178.63 'mkdir -p /lib/firmware'
 scp target/thumbv7em-none-eabihf/debug/stm32mp1-hal root@192.168.178.63:/lib/firmware/firmware.elf
 ssh root@192.168.178.63 'echo stop > /sys/class/remoteproc/remoteproc0/state'
