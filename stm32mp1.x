@@ -102,17 +102,11 @@ SECTIONS
   .rodata __etext : ALIGN(4)
   {
     *(.rodata .rodata.*);
-
-    /* 4-byte align the end (VMA) of this section.
-       This is required by LLD to ensure the LMA of the following .data
-       section will have the correct alignment. */
-    . = ALIGN(4);
-    __erodata = .;
   } > FLASH
 
   /* ## Sections in RAM */
   /* ### .data */
-  .data : AT(__erodata) ALIGN(4)
+  .data : ALIGN(4)
   {
     . = ALIGN(4);
     __sdata = .;
@@ -149,6 +143,7 @@ SECTIONS
   .version : {
       KEEP(*(.version))
   } > FLASH
+
 
   /* ### .uninit */
   .uninit (NOLOAD) : ALIGN(4)
