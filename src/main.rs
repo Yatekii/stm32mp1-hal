@@ -39,6 +39,7 @@ use resource_table as rt;
 use rpmsg::SendMessage;
 
 pub use stm32mp1::__INTERRUPTS;
+pub use stm32mp1_pac as target;
 
 // ****************************************************************************
 //
@@ -138,8 +139,8 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
         /// section. Ideally we'd just take the address of our buffer
         /// but that's now allowed in a static variable definition.
 //        da: 0x10056800,
-        da: 0x10044000,
-        len: 0x8000,
+        da: 0x1002C000,
+        len: 0x4000,
         reserved: 0,
         name: rt::String32 {
             buffer: *b"Hellau from Roest\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
@@ -220,14 +221,61 @@ const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 
 
 #[cortex_m_rt::entry]
 fn main() -> ! {
+    let i = 8;
+    let offset = 2 * i;
+    unsafe {
+        &(*target::RCC::ptr())
+            .rcc_mc_ahb3ensetr
+            .write(|w| w.hsemen().set_bit());
+        &(*target::RCC::ptr())
+            .rcc_mc_ahb4ensetr
+            .write(|w| w.gpioden().set_bit());
+
+        &(*target::GPIOD::ptr())
+            .gpiox_pupdr
+            .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
+        &(*target::GPIOD::ptr())
+            .gpiox_otyper
+            .modify(|r, w| w.bits(r.bits() & !(0b1 << i)));
+        &(*target::GPIOD::ptr())
+            .gpiox_moder
+            .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
+    }
+
+    let i = 9;
+    let offset = 2 * i;
+    unsafe {
+        &(*target::GPIOD::ptr())
+            .gpiox_pupdr
+            .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
+        &(*target::GPIOD::ptr())
+            .gpiox_otyper
+            .modify(|r, w| w.bits(r.bits() & !(0b1 << i)));
+        &(*target::GPIOD::ptr())
+            .gpiox_moder
+            .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
+    }
+
+    unsafe { (*target::GPIOD::ptr()).gpiox_bsrr.write(|w| w.bits(1 << 8)) }
+    unsafe { (*target::GPIOD::ptr()).gpiox_bsrr.write(|w| w.bits(1 << 9)) }
+
     let mut chip = stm32mp1::Stm32mp1::claim().unwrap();
 
     let t = trace::get_trace().unwrap();
+
     writeln!(t, "Setup complete. Booting {:?}", version::version()).unwrap();
 
+    unsafe {
+        (*target::GPIOD::ptr())
+            .gpiox_bsrr
+            .write(|w| w.bits(1 << (8 + 16)))
+    };
+
+    let mut i = 0;
     loop {
-        writeln!(t, "Printing").unwrap();
-        for _ in 0..100_000 {
+        writeln!(t, "Hello from Rust {}!", i).unwrap();
+        i += 1;
+        for _ in 0..1_000_000 {
             cortex_m::asm::nop();
         }
     }

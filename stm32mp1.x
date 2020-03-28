@@ -24,9 +24,10 @@ MEMORY
   /* For the STM32MP1 IPU1 */
   /* We don't really have FLASH and RAM, just DDR
      but we keep the two segments to compatibility with cortex-m-rt */
-  ISR    (RX)  : ORIGIN = 0x00000000, LENGTH = 0x00000298
+  ISR          (RX)  : ORIGIN = 0x00000000, LENGTH = 0x00000298
   FLASH        (RWX) : ORIGIN = 0x10000000, LENGTH = 64K
-  RAM          (RW)  : ORIGIN = 0x10020000, LENGTH = 64K
+  RAM          (RW)  : ORIGIN = 0x10020000, LENGTH = 64K - 16K
+  TRACE_DATA   (RW)  : ORIGIN = 0x1002C000, LENGTH = 16K
   IPC_DATA     (RW)  : ORIGIN = 0x10040000, LENGTH = 32K
 }
 
@@ -129,9 +130,9 @@ SECTIONS
   } > RAM
 
   /* This is how we communicate with the kernel */
-  .tracebuffer ORIGIN(IPC_DATA): {
+  .tracebuffer ORIGIN(TRACE_DATA) : {
       KEEP(*(.tracebuffer .tracebuffer.*))
-  } > IPC_DATA
+  } > TRACE_DATA
 
   /* The kernel looks for a section with this name */
   .resource_table : {
