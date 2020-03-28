@@ -6,9 +6,9 @@ use std::path::PathBuf;
 fn main() {
     // Put the linker script somewhere the linker can find it
     let out = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
-    File::create(out.join("memory.x"))
+    File::create(out.join("stm32mp1.x"))
         .unwrap()
-        .write_all(include_bytes!("memory.x"))
+        .write_all(include_bytes!("stm32mp1.x"))
         .unwrap();
     println!("cargo:rustc-link-search={}", out.display());
 
