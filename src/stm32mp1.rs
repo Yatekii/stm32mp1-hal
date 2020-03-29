@@ -751,7 +751,7 @@ where
         unsafe {
             if AVAILABLE {
                 let mut r = Stm32mp1 { mapper };
-                r.setup();
+                // r.setup();
                 AVAILABLE = false;
                 Some(r)
             } else {

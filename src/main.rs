@@ -477,11 +477,11 @@ fn main() -> ! {
     unsafe { (*target::GPIOD::ptr()).gpiox_bsrr.write(|w| w.bits(1 << 8)) }
     unsafe { (*target::GPIOD::ptr()).gpiox_bsrr.write(|w| w.bits(1 << 9)) }
 
-    let mut chip = stm32mp1::Stm32mp1::claim(&RESOURCE_TABLE).unwrap();
-
     let t = trace::get_trace().unwrap();
 
-    writeln!(t, "Setup complete. Booting {:?}", version::version()).unwrap();
+    writeln!(t, "M4 up and running.").unwrap();
+
+    let mut chip = stm32mp1::Stm32mp1::claim(&RESOURCE_TABLE).unwrap();
 
     unsafe {
         (*target::GPIOD::ptr())
@@ -683,6 +683,11 @@ fn mailbox_isr() {
 #[panic_handler]
 #[inline(never)]
 pub fn panic(info: &PanicInfo) -> ! {
+    unsafe {
+        (*target::GPIOD::ptr())
+            .gpiox_bsrr
+            .write(|w| w.bits(1 << (8 + 16)))
+    };
     let mut t = unsafe { trace::steal_trace() };
     let _ = writeln!(t, "*** SYSTEM PANIC!: {:?}", info);
     loop {}
