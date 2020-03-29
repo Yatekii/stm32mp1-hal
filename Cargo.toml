@@ -4,16 +4,17 @@ version = "0.1.0"
 authors = ["Noah Hüsser <yatekii@yatekii.ch>"]
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
-stm32mp1-pac = { version = "0.1.0", git = "https://github.com/Yatekii/stm32mp1-pac" }
-panic-halt = "*"
 cortex-m = "0.6.1"
 nb = "0.1.2"
+embedded-hal = { version = "0.2.3", features = ["unproven"] }
 
 [dependencies.vring]
 path = "./vring"
+
+[dependencies.hal]
+path = "./hal"
+features = ["stm32mp153"]
 
 [dependencies.volatile-register]
 version = "0.2"

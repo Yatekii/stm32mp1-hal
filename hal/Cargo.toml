@@ -1,0 +1,12 @@
+[package]
+name = "hal"
+version = "0.1.0"
+authors = ["Noah Hüsser <nh@technokrat.ch>"]
+edition = "2018"
+
+[features]
+stm32mp153 = []
+
+[dependencies]
+stm32mp1-pac = { version = "0.1.0", git = "https://github.com/Yatekii/stm32mp1-pac" }
+embedded-hal = { version = "0.2.3", features = ["unproven"] }
