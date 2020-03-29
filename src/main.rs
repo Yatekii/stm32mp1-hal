@@ -35,6 +35,7 @@ extern crate vring;
 use core::fmt::Write;
 use core::panic::PanicInfo;
 use resource_table as rt;
+use rt::{AddressMapper, Region, ResourceTable, NUM_ENTRIES, SZ_RT_HEADER};
 
 use rpmsg::SendMessage;
 
@@ -69,21 +70,6 @@ mod version;
 //
 // ****************************************************************************
 
-/// This resource table structure is processed by the kernel. We can map as
-/// many resources as we require, but ensure that the offsets array is
-/// calculated correctly. Resource tables are specific to each application,
-/// but in this case it closely matches the TI example.
-#[repr(C)]
-#[derive(Debug)]
-pub struct ResourceTable {
-    base: rt::Header,
-    offsets: [usize; NUM_ENTRIES],
-    rpmsg_vdev: rt::Vdev,
-    rpmsg_vring0: rt::VdevVring,
-    rpmsg_vring1: rt::VdevVring,
-    trace: rt::Trace,
-}
-
 // ****************************************************************************
 
 //
@@ -100,7 +86,13 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
         reserved: [0, 0],
     },
     // We don't have an offsetof macro so we have to calculate these by hand
-    offsets: [SZ_RT_HEADER, SZ_RT_HEADER + 68],
+    offsets: [
+        SZ_RT_HEADER,
+        SZ_RT_HEADER + 68,
+        SZ_RT_HEADER + 124,
+        SZ_RT_HEADER + 180,
+        SZ_RT_HEADER + 236,
+    ],
 
     rpmsg_vdev: rt::Vdev {
         rtype: rt::ResourceType::VDEV,
@@ -132,6 +124,42 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
         reserved: 0,
     },
 
+    text_cout: rt::Carveout {
+        rtype: rt::ResourceType::CARVEOUT,
+        da: 0x00000000,
+        pa: 0, // Auto allocated by kernel
+        len: rt::SZ_1M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_MEM_TEXT\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    data_cout: rt::Carveout {
+        rtype: rt::ResourceType::CARVEOUT,
+        da: 0x80000000,
+        pa: 0, // Auto allocated by kernel
+        len: rt::SZ_1M * 5,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_MEM_DATA\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    ipcdata_cout: rt::Carveout {
+        rtype: rt::ResourceType::CARVEOUT,
+        da: 0x9F000000,
+        pa: 0, // Auto allocated by kernel
+        len: rt::SZ_1M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_MEM_IPC_DATA\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
     trace: rt::Trace {
         rtype: rt::ResourceType::TRACE,
         /// We must ensure that the tracebuffer structure is linked at this
@@ -144,6 +172,199 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
         reserved: 0,
         name: rt::String32 {
             buffer: *b"Hellau from Roest\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem0: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x60000000,
+        /// This has to match the CMA for IPU1 in the Device Tree
+        pa: 0x9D000000,
+        len: rt::SZ_1M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_MEM_IPC_VRING\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem1: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x90000000,
+        pa: 0xBA300000,
+        len: rt::SZ_1M * 90,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_MEM_IOBUFS\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem2: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0xA0000000,
+        pa: stm32mp1::L3_TILER_MODE_0_1,
+        len: rt::SZ_256M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_TILER_MODE_0_1\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem3: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0xB0000000,
+        pa: stm32mp1::L3_TILER_MODE_2,
+        len: rt::SZ_128M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_TILER_MODE_2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem4: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0xB8000000,
+        pa: stm32mp1::L3_TILER_MODE_3,
+        len: rt::SZ_128M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_TILER_MODE_3\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem5: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x6A000000,
+        pa: stm32mp1::L4_PERIPHERAL_L4CFG,
+        len: rt::SZ_16M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_L4CFG\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem6: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x68000000,
+        pa: stm32mp1::L4_PERIPHERAL_L4PER1,
+        len: rt::SZ_2M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_L4PER1\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem7: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x68400000,
+        pa: stm32mp1::L4_PERIPHERAL_L4PER2,
+        len: rt::SZ_4M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_L4PER2\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem8: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x68800000,
+        pa: stm32mp1::L4_PERIPHERAL_L4PER3,
+        len: rt::SZ_8M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_L4PER3\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem9: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x74000000,
+        pa: stm32mp1::L4_PERIPHERAL_L4EMU,
+        len: rt::SZ_16M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_L4EMU\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem10: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x6B200000,
+        pa: stm32mp1::L3_PERIPHERAL_PRUSS,
+        len: rt::SZ_1M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_PRUSS\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem11: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x7A000000,
+        pa: stm32mp1::L3_IVAHD_CONFIG,
+        len: rt::SZ_16M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_IVAHD_CONFIG\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem12: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x7B000000,
+        pa: stm32mp1::L3_IVAHD_SL2,
+        len: rt::SZ_16M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_IVAHD_SL2\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem13: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x6E000000,
+        pa: stm32mp1::L3_PERIPHERAL_DMM,
+        len: rt::SZ_1M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_PERIPHERAL_DMM\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem14: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x60300000,
+        pa: stm32mp1::L3_OCMC_RAM,
+        len: rt::SZ_4M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_OCMC_RAM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
+        },
+    },
+
+    devmem15: rt::Devmem {
+        rtype: rt::ResourceType::DEVMEM,
+        da: 0x10000000,
+        pa: stm32mp1::L3_EMIF_SDRAM,
+        len: rt::SZ_256M,
+        flags: 0,
+        reserved: 0,
+        name: rt::String32 {
+            buffer: *b"IPU_EMIF_SDRAM\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0",
         },
     },
 };
@@ -188,30 +409,27 @@ where
 //
 // ****************************************************************************
 
-const NUM_ENTRIES: usize = 2;
-const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 4);
-//
-//const HOST_ID: u32 = 100;
-//const REMOTE_ID: u32 = 61;
-//const NAMESERVER_ID: u32 = 53;
-//
-//const RX_MAILBOX: stm32mp1::MailboxLocation = stm32mp1::MailboxLocation {
-//    id: stm32mp1::MailboxId::Mailbox5,
-//    user: stm32mp1::MailboxUser::User1,
-//    slot: stm32mp1::MailboxSlot::Slot6,
-//};
-//
-//const TX_MAILBOX: stm32mp1::MailboxLocation = stm32mp1::MailboxLocation {
-//    id: stm32mp1::MailboxId::Mailbox5,
-//    user: stm32mp1::MailboxUser::User1,
-//    slot: stm32mp1::MailboxSlot::Slot4,
-//};
-//
-//static mut MAILBOX_FIFO: Fifo<u32> = Fifo {
-//    storage: [0; 64],
-//    read: 0,
-//    write: 0,
-//};
+const HOST_ID: u32 = 100;
+const REMOTE_ID: u32 = 61;
+const NAMESERVER_ID: u32 = 53;
+
+const RX_MAILBOX: stm32mp1::MailboxLocation = stm32mp1::MailboxLocation {
+    id: stm32mp1::MailboxId::Mailbox5,
+    user: stm32mp1::MailboxUser::User1,
+    slot: stm32mp1::MailboxSlot::Slot6,
+};
+
+const TX_MAILBOX: stm32mp1::MailboxLocation = stm32mp1::MailboxLocation {
+    id: stm32mp1::MailboxId::Mailbox5,
+    user: stm32mp1::MailboxUser::User1,
+    slot: stm32mp1::MailboxSlot::Slot4,
+};
+
+static mut MAILBOX_FIFO: Fifo<u32> = Fifo {
+    storage: [0; 64],
+    read: 0,
+    write: 0,
+};
 
 // ****************************************************************************
 //
@@ -259,7 +477,7 @@ fn main() -> ! {
     unsafe { (*target::GPIOD::ptr()).gpiox_bsrr.write(|w| w.bits(1 << 8)) }
     unsafe { (*target::GPIOD::ptr()).gpiox_bsrr.write(|w| w.bits(1 << 9)) }
 
-    let mut chip = stm32mp1::Stm32mp1::claim().unwrap();
+    let mut chip = stm32mp1::Stm32mp1::claim(&RESOURCE_TABLE).unwrap();
 
     let t = trace::get_trace().unwrap();
 
@@ -271,80 +489,71 @@ fn main() -> ! {
             .write(|w| w.bits(1 << (8 + 16)))
     };
 
-    let mut i = 0;
-    loop {
-        writeln!(t, "Hello from Rust {}!", i).unwrap();
-        i += 1;
-        for _ in 0..1_000_000 {
-            cortex_m::asm::nop();
+    // This vring is full of available buffers we can use to send
+    // data back to the host.
+    let ipu_to_host = unsafe {
+        vring::GuestVring::new(
+            RESOURCE_TABLE.rpmsg_vring0.da,
+            RESOURCE_TABLE.rpmsg_vring0.num,
+            RESOURCE_TABLE.rpmsg_vring0.align,
+            &address_map,
+        )
+    };
+    //
+    // This vring containers buffers the host wishes us to look at and do
+    // something with.
+    let host_to_ipu = unsafe {
+        vring::GuestVring::new(
+            RESOURCE_TABLE.rpmsg_vring1.da,
+            RESOURCE_TABLE.rpmsg_vring1.num,
+            RESOURCE_TABLE.rpmsg_vring1.align,
+            &address_map,
+        )
+    };
+
+    // Spin until status is OK
+    {
+        const BUFS_PRIMED: u8 = vring::VIRTIO_CONFIG_S_ACKNOWLEDGE
+            | vring::VIRTIO_CONFIG_S_DRIVER
+            | vring::VIRTIO_CONFIG_S_DRIVER_OK;
+        let status_ptr = &RESOURCE_TABLE.rpmsg_vdev.status as *const u8;
+        loop {
+            chip.cache_flush(
+                &RESOURCE_TABLE.rpmsg_vdev,
+                ::core::mem::size_of::<rt::Vdev>(),
+                stm32mp1::CacheFlushMode::Invalidate,
+            );
+            // Volatile read as we're in a loop
+            let status = unsafe { ::core::ptr::read_volatile(status_ptr) };
+            writeln!(t, "Buffer status is {}", status).unwrap();
+            if status == BUFS_PRIMED {
+                break;
+            } else {
+                for _ in 0..100_000 {
+                    cortex_m::asm::nop();
+                }
+            }
         }
     }
 
-    //    // This vring is full of available buffers we can use to send
-    //    // data back to the host.
-    //    let ipu_to_host = unsafe {
-    //        vring::GuestVring::new(
-    //            RESOURCE_TABLE.rpmsg_vring0.da,
-    //            RESOURCE_TABLE.rpmsg_vring0.num,
-    //            RESOURCE_TABLE.rpmsg_vring0.align,
-    //            &address_map,
-    //        )
-    //    };
-    //
-    //    // This vring containers buffers the host wishes us to look at and do
-    //    // something with.
-    //    let host_to_ipu = unsafe {
-    //        vring::GuestVring::new(
-    //            RESOURCE_TABLE.rpmsg_vring1.da,
-    //            RESOURCE_TABLE.rpmsg_vring1.num,
-    //            RESOURCE_TABLE.rpmsg_vring1.align,
-    //            &address_map,
-    //        )
-    //    };
-    //
-    //    // Spin until status is OK
-    //    {
-    //        const BUFS_PRIMED: u8 = vring::VIRTIO_CONFIG_S_ACKNOWLEDGE
-    //            | vring::VIRTIO_CONFIG_S_DRIVER
-    //            | vring::VIRTIO_CONFIG_S_DRIVER_OK;
-    //        let status_ptr = &RESOURCE_TABLE.rpmsg_vdev.status as *const u8;
-    //        loop {
-    //            chip.cache_flush(
-    //                &RESOURCE_TABLE.rpmsg_vdev,
-    //                ::core::mem::size_of::<rt::Vdev>(),
-    //                stm32mp1::CacheFlushMode::Invalidate,
-    //            );
-    //            // Volatile read as we're in a loop
-    //            let status = unsafe { ::core::ptr::read_volatile(status_ptr) };
-    //            writeln!(t, "Buffer status is {}", status).unwrap();
-    //            if status == BUFS_PRIMED {
-    //                break;
-    //            } else {
-    //                for _ in 0..100_000 {
-    //                    cortex_m::asm::nop();
-    //                }
-    //            }
-    //        }
-    //    }
-    //
-    //    chip.send_message(rpmsg::MBOX_BOOTINIT_DONE, TX_MAILBOX);
-    //
-    //    writeln!(t, "Send boot init.").unwrap();
-    //
-    //    let mut transport = rpmsg::Transport::new(ipu_to_host, host_to_ipu);
-    //    let res = register_proto(&mut chip, &mut transport);
-    //
-    //    writeln!(t, "Registered proto {:?}", res).unwrap();
-    //
-    //    writeln!(t, "Transport is now: {:#?}", transport).unwrap();
-    //
-    //    chip.disable_mailbox_interrupts(RX_MAILBOX.id, RX_MAILBOX.user);
-    //    chip.disable_mailbox_interrupts(TX_MAILBOX.id, TX_MAILBOX.user);
-    //    chip.enable_mailbox_data_interrupt(RX_MAILBOX);
-    //    chip.interrupt_enable(stm32mp1::Interrupt::Ipu1Irq44);
-    //    unsafe {
-    //        cortex_m::interrupt::enable();
-    //    }
+    chip.send_message(rpmsg::MBOX_BOOTINIT_DONE, TX_MAILBOX);
+
+    writeln!(t, "Send boot init.").unwrap();
+
+    let mut transport = rpmsg::Transport::new(ipu_to_host, host_to_ipu);
+    let res = register_proto(&mut chip, &mut transport);
+
+    writeln!(t, "Registered proto {:?}", res).unwrap();
+
+    writeln!(t, "Transport is now: {:#?}", transport).unwrap();
+
+    chip.disable_mailbox_interrupts(RX_MAILBOX.id, RX_MAILBOX.user);
+    chip.disable_mailbox_interrupts(TX_MAILBOX.id, TX_MAILBOX.user);
+    chip.enable_mailbox_data_interrupt(RX_MAILBOX);
+    chip.interrupt_enable(stm32mp1_pac::Interrupt::IPCC_RX1);
+    unsafe {
+        cortex_m::interrupt::enable();
+    }
     //
     //    let mut loops: u32 = 0;
     //    loop {
@@ -403,6 +612,8 @@ fn main() -> ! {
     //            cortex_m::asm::wfe();
     //        }
     //    }
+
+    loop {}
 }
 
 // ****************************************************************************
@@ -411,29 +622,29 @@ fn main() -> ! {
 //
 // ****************************************************************************
 
-///// Register an rpmsg protocol
-//fn register_proto<T>(
-//    chip: &mut stm32mp1::Am5728<T>,
-//    transport: &mut rpmsg::Transport,
-//) -> Result<(), rpmsg::Error>
-//where
-//    T: rt::AddressMapper,
-//{
-//    let msg = rpmsg::NameServiceAnnounce::new(
-//        "rpmsg-proto",
-//        "rpmsg-proto",
-//        REMOTE_ID,
-//        rpmsg::NameServiceAnnounceFlags::Create,
-//    );
-//    let res = transport.send(REMOTE_ID, NAMESERVER_ID, &msg);
-//    chip.send_message(0, TX_MAILBOX);
-//    res
-//}
-//
-//// Convert the addresses in the vring to addresses we can actually read
-//fn address_map(physical_address: u64) -> u64 {
-//    RESOURCE_TABLE.pa_to_da(physical_address as usize).unwrap() as u64
-//}
+/// Register an rpmsg protocol
+fn register_proto<T>(
+    chip: &mut stm32mp1::Stm32mp1<T>,
+    transport: &mut rpmsg::Transport,
+) -> Result<(), rpmsg::Error>
+where
+    T: rt::AddressMapper,
+{
+    let msg = rpmsg::NameServiceAnnounce::new(
+        "rpmsg-proto",
+        "rpmsg-proto",
+        REMOTE_ID,
+        rpmsg::NameServiceAnnounceFlags::Create,
+    );
+    let res = transport.send(REMOTE_ID, NAMESERVER_ID, &msg);
+    chip.send_message(0, TX_MAILBOX);
+    res
+}
+
+// Convert the addresses in the vring to addresses we can actually read
+fn address_map(physical_address: u64) -> u64 {
+    RESOURCE_TABLE.pa_to_da(physical_address as usize).unwrap() as u64
+}
 
 // // define the hard fault handler
 // cortex_m_rt::exception!(HardFault, hard_fault);
@@ -452,22 +663,22 @@ fn default_handler(irqn: i16) {
     panic!("Unhandled exception (IRQn = {})", irqn);
 }
 
-//interrupt!(Ipu1Irq44, mailbox_isr);
-//fn mailbox_isr() {
-//    unsafe {
-//        // We have to do the read in the interrupt otherwise we'll bounce straight back in to this ISR
-//        let mailbox =
-//            stm32mp1::get_mailbox(RX_MAILBOX.id, &RESOURCE_TABLE).expect("Bad resource_table in IRQ");
-//        if let Some(id) = mailbox.get_message(RX_MAILBOX.slot) {
-//            MAILBOX_FIFO.push(id);
-//            // Clear the interrupt flag
-//            mailbox.clear_interrupts(RX_MAILBOX.user);
-//            // Set event to wake from wfe, in case this occurs just after the FIFO
-//            // check but just before we enter wfe.
-//            cortex_m::asm::sev();
-//        }
-//    };
-//}
+interrupt!(IPCC_RX1, mailbox_isr);
+fn mailbox_isr() {
+    unsafe {
+        // We have to do the read in the interrupt otherwise we'll bounce straight back in to this ISR
+        let mailbox = stm32mp1::get_mailbox(RX_MAILBOX.id, &RESOURCE_TABLE)
+            .expect("Bad resource_table in IRQ");
+        if let Some(id) = mailbox.get_message(RX_MAILBOX.slot) {
+            MAILBOX_FIFO.push(id);
+            // Clear the interrupt flag
+            mailbox.clear_interrupts(RX_MAILBOX.user);
+            // Set event to wake from wfe, in case this occurs just after the FIFO
+            // check but just before we enter wfe.
+            cortex_m::asm::sev();
+        }
+    };
+}
 
 #[panic_handler]
 #[inline(never)]
