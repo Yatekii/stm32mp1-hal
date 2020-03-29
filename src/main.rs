@@ -14,6 +14,7 @@ use resource_table as rt;
 use rpmsg::SendMessage;
 
 pub use stm32mp1_pac as target;
+pub use target::interrupt;
 
 
 #[macro_use]
@@ -361,6 +362,10 @@ fn send_IPCC_msg()
 
 #[interrupt]
 fn IPCC_RX1() {
+    let t = trace::get_trace().unwrap();
+    writeln!(t, "TEST !!!").unwrap();
+}
+
 //    unsafe {
 //        // We have to do the read in the interrupt otherwise we'll bounce straight back in to this ISR
 //        let mailbox =
@@ -374,7 +379,7 @@ fn IPCC_RX1() {
 //            cortex_m::asm::sev();
 //        }
 //    };
-}
+
 
 #[panic_handler]
 #[inline(never)]
