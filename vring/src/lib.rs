@@ -1,49 +1,7 @@
-//! # vring - VirtIO support for P3642 (I) Cerberust
-//!
-//! Copyright (c) 2018, Cambridge Consultants Ltd.
-//! See the top-level README.md for licence details.
-//!
-//! Implements the Linux kernel vring interface
-//! See http://docs.oasis-open.org/virtio/virtio/v1.0/virtio-v1.0.pdf
-
-// ****************************************************************************
-//
-// Crates
-//
-// ****************************************************************************
-
 #![cfg_attr(not(test), no_std)]
-
-// ****************************************************************************
-//
-// Imports
-//
-// ****************************************************************************
 
 #[cfg(test)]
 use std as core;
-
-// ****************************************************************************
-//
-// Sub-modules
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Macros
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Public Types / Traits
-//
-// ****************************************************************************
 
 /// Represents a Host view of a Vring. Holds no data itself, but instead points to an area
 /// of statically allocated RAM.
@@ -54,7 +12,6 @@ pub struct HostVring {
     used: &'static mut UsedRing,
     entries: usize,
     last_seen_used: u16,
-    addr_map: &'static dyn Fn(u64) -> u64
 }
 
 /// Represents a Guest view of a Vring. Holds no data itself, but instead points to an area
@@ -65,7 +22,6 @@ pub struct GuestVring {
     used: &'static mut UsedRing,
     entries: usize,
     last_seen_available: u16,
-    addr_map: &'static dyn Fn(u64) -> u64
 }
 
 /// A ring of buffers. Indexes to these buffer descriptors are placed in the
@@ -191,12 +147,6 @@ pub enum Error {
     PayloadTooLarge
 }
 
-// ****************************************************************************
-//
-// Public Data
-//
-// ****************************************************************************
-
 pub const VIRTIO_CONFIG_S_ACKNOWLEDGE: u8 =  1;
 pub const VIRTIO_CONFIG_S_DRIVER: u8 =  2;
 pub const VIRTIO_CONFIG_S_DRIVER_OK: u8 =  4;
@@ -208,28 +158,6 @@ pub const VIRTIO_ID_CONSOLE: u32 = 3;
 
 /// virtio remote processor messaging
 pub const VIRTIO_ID_RPMSG: u32 = 7;
-
-// ****************************************************************************
-//
-// Private Types / Traits
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Private Data
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Public Functions / Impl
-//
-// ****************************************************************************
 
 impl HostVring {
     /// Creates a new `Vring` from an address. Unsafe because you need to
@@ -244,7 +172,7 @@ impl HostVring {
     /// for allocating new buffers.
     ///
     /// We also need to support chaining multiple buffers.
-    pub unsafe fn new<F>(addr: usize, entries: usize, align: usize, addr_map: &'static F) -> HostVring
+    pub unsafe fn new<F>(addr: usize, entries: usize, align: usize) -> HostVring
     where
         F: Fn(u64) -> u64
     {
@@ -258,7 +186,6 @@ impl HostVring {
             entries,
             head: Some(0),
             last_seen_used: 0,
-            addr_map,
         }
     }
 
@@ -286,8 +213,6 @@ impl HostVring {
                     }
 
                     let mut e_copy = *e;
-                    e_copy.addr = (self.addr_map)(e_copy.addr);
-
                     callback(&mut e_copy);
 
                     e.len = e_copy.len;
@@ -338,9 +263,7 @@ impl GuestVring {
     ///
     /// Note there is assumed to be some alignment padding between
     /// the available ring and the used ring.
-    pub unsafe fn new<F>(addr: usize, entries: usize, align: usize, addr_map: &'static F) -> GuestVring
-    where
-        F: Fn(u64) -> u64
+    pub unsafe fn new(addr: usize, entries: usize, align: usize) -> GuestVring
     {
         let available_addr = addr + (16 * entries);
         let available_end = available_addr + 6 + (2 * entries);
@@ -351,7 +274,6 @@ impl GuestVring {
             used: &mut *(used_addr as *mut UsedRing),
             entries,
             last_seen_available: 0,
-            addr_map,
         }
     }
 
@@ -372,9 +294,7 @@ impl GuestVring {
             let e = unsafe { &mut *(descriptor_table.offset(available_idx.idx as isize)) };
 
 
-            let mut e_copy = *e;
-            e_copy.addr = (self.addr_map)(e_copy.addr);
-
+            let e_copy = *e;
             callback(&e_copy);
 
             // Move to used
@@ -408,7 +328,7 @@ impl GuestVring {
                 &mut self.descriptors.ring as *mut DescriptorEntry;
             let e = unsafe { &mut *(descriptor_table.offset(available_idx.idx as isize)) };
 
-            let addr = (self.addr_map)(e.addr) as *mut u8;
+            let addr = e.addr as *mut u8;
 
             let length1 = ::core::mem::size_of::<P1>();
             let length2 = ::core::mem::size_of::<P2>();
@@ -565,157 +485,144 @@ impl UsedFlags {
     }
 }
 
-// ****************************************************************************
+//#[cfg(test)]
+//mod test {
+//    use super::*;
 //
-// Private Functions
+//    #[test]
+//    fn test_align() {
+//        for bits in 2..30 {
+//            let a = 1 << bits;
+//            assert_eq!(align_address(0, a), 0);
+//            assert_eq!(align_address(1, a), a);
+//            assert_eq!(align_address(a - 1, a), a);
+//            assert_eq!(align_address(a, a), a);
+//            assert_eq!(align_address(a + 1, a), a * 2);
+//        }
+//    }
 //
-// ****************************************************************************
-
-#[cfg(test)]
-mod test {
-    use super::*;
-
-    #[test]
-    fn test_align() {
-        for bits in 2..30 {
-            let a = 1 << bits;
-            assert_eq!(align_address(0, a), 0);
-            assert_eq!(align_address(1, a), a);
-            assert_eq!(align_address(a - 1, a), a);
-            assert_eq!(align_address(a, a), a);
-            assert_eq!(align_address(a + 1, a), a * 2);
-        }
-    }
-
-    #[test]
-    fn test_flags() {
-        let flags = DescriptorFlags(3);
-        assert_eq!(flags.is_set(DescriptorFlag::Next), true);
-        assert_eq!(flags.is_set(DescriptorFlag::Write), true);
-        assert_eq!(flags.is_set(DescriptorFlag::Indirect), false);
-
-        let flags = DescriptorFlags(5);
-        assert_eq!(flags.is_set(DescriptorFlag::Next), true);
-        assert_eq!(flags.is_set(DescriptorFlag::Write), false);
-        assert_eq!(flags.is_set(DescriptorFlag::Indirect), true);
-
-        let mut flags = UsedFlags(0);
-        assert_eq!(flags.is_set(UsedFlag::NoNotify), false);
-        flags.set(UsedFlag::NoNotify);
-        assert_eq!(flags.is_set(UsedFlag::NoNotify), true);
-        flags.clear(UsedFlag::NoNotify);
-        assert_eq!(flags.is_set(UsedFlag::NoNotify), false);
-
-        let mut flags = AvailableFlags(0);
-        assert_eq!(flags.is_set(AvailableFlag::NoInterrupt), false);
-        flags.set(AvailableFlag::NoInterrupt);
-        assert_eq!(flags.is_set(AvailableFlag::NoInterrupt), true);
-        flags.clear(AvailableFlag::NoInterrupt);
-        assert_eq!(flags.is_set(AvailableFlag::NoInterrupt), false);
-    }
-
-    #[repr(C)]
-    #[derive(Debug, Copy, Clone)]
-    struct Buffer {
-        data: [u8; 16],
-    }
-
-    #[repr(C)]
-    #[derive(Debug)]
-    struct VirtQueue {
-        descriptors: [DescriptorEntry; 8],
-        available_flags: AvailableFlags,
-        available_idx: u16,
-        available_ring: [AvailableEntry; 8],
-        used_flags: UsedFlags,
-        used_idx: u16,
-        used_ring: [UsedEntry; 8],
-        buffers: [Buffer; 8],
-    }
-
-    fn make_virtqueue() -> Box<VirtQueue> {
-        let mut v = Box::new(VirtQueue {
-            descriptors: [DescriptorEntry {
-                addr: 0,
-                len: 0,
-                flags: DescriptorFlags(0),
-                next: 0,
-            }; 8],
-            available_flags: AvailableFlags(0),
-            available_idx: 0,
-            available_ring: [AvailableEntry { idx: 0 }; 8],
-            used_flags: UsedFlags(0),
-            used_idx: 0,
-            used_ring: [UsedEntry { idx: 0, len: 0 }; 8],
-            buffers: [Buffer { data: [0u8; 16] }; 8],
-        });
-
-        // See http://docs.oasis-open.org/virtio/virtio/v1.0/virtio-v1.0.pdf
-        // section 3.2.1.1 Placing Buffers Into The Descriptor Table
-        for idx in 0..8 {
-            v.descriptors[idx].addr = &v.buffers[idx].data[0] as *const _ as u64;
-            v.descriptors[idx].len = v.buffers[idx].data.len() as u32;
-            v.descriptors[idx].flags.set(DescriptorFlag::Write);
-            if idx < 7 {
-                v.descriptors[idx].next = (idx + 1) as u16;
-                v.descriptors[idx].flags.set(DescriptorFlag::Next);
-            }
-        }
-
-        v
-    }
-
-    #[test]
-    fn get_descriptors() {
-        let backing = make_virtqueue();
-        let backing_pointer = Box::into_raw(backing);
-        let mut hq = unsafe { HostVring::new(backing_pointer as usize, 8, 1) };
-
-        for i in 0..8 {
-            hq.give_to_guest(|entry| {
-                assert!(entry.flags.is_clear(DescriptorFlag::Next));
-                // Buffer is not device writable, we (the host) are writing it
-                entry.flags.clear(DescriptorFlag::Write);
-                {
-                    let buffer = entry.get_buffer();
-                    buffer[0] = i as u8;
-                    buffer[1] = (i + 1) as u8;
-                    buffer[2] = (i + 2) as u8;
-                }
-                entry.len = 3;
-            }).unwrap();
-        }
-
-        // We should now be out of memory
-        assert!(hq.give_to_guest(|_| {}).is_err());
-
-        // Now pretend we are the guest, processing these packets.
-        let mut vq = unsafe { GuestVring::new(backing_pointer as usize, 8, 1) };
-        for i in 0..8 {
-            vq.process(|entry| {
-                assert!(entry.flags.is_clear(DescriptorFlag::Write));
-                assert!(entry.flags.is_clear(DescriptorFlag::Next));
-                let buffer = entry.get_buffer();
-                assert_eq!(buffer.len(), 3);
-                assert_eq!(buffer[0], i);
-                assert_eq!(buffer[1], i + 1);
-                assert_eq!(buffer[2], i + 2);
-                0
-            }).unwrap();
-        }
-
-        // for _i in 0..8 {
-        //     hq.take_from_guest(|entry| {
-        //         assert!(entry.flags.is_clear(DescriptorFlag::Next));
-        //     }).unwrap();
-        // }
-
-        let _backing = unsafe { Box::from_raw(backing_pointer) };
-    }
-}
-
-// ****************************************************************************
+//    #[test]
+//    fn test_flags() {
+//        let flags = DescriptorFlags(3);
+//        assert_eq!(flags.is_set(DescriptorFlag::Next), true);
+//        assert_eq!(flags.is_set(DescriptorFlag::Write), true);
+//        assert_eq!(flags.is_set(DescriptorFlag::Indirect), false);
 //
-// End Of File
+//        let flags = DescriptorFlags(5);
+//        assert_eq!(flags.is_set(DescriptorFlag::Next), true);
+//        assert_eq!(flags.is_set(DescriptorFlag::Write), false);
+//        assert_eq!(flags.is_set(DescriptorFlag::Indirect), true);
 //
-// ****************************************************************************
+//        let mut flags = UsedFlags(0);
+//        assert_eq!(flags.is_set(UsedFlag::NoNotify), false);
+//        flags.set(UsedFlag::NoNotify);
+//        assert_eq!(flags.is_set(UsedFlag::NoNotify), true);
+//        flags.clear(UsedFlag::NoNotify);
+//        assert_eq!(flags.is_set(UsedFlag::NoNotify), false);
+//
+//        let mut flags = AvailableFlags(0);
+//        assert_eq!(flags.is_set(AvailableFlag::NoInterrupt), false);
+//        flags.set(AvailableFlag::NoInterrupt);
+//        assert_eq!(flags.is_set(AvailableFlag::NoInterrupt), true);
+//        flags.clear(AvailableFlag::NoInterrupt);
+//        assert_eq!(flags.is_set(AvailableFlag::NoInterrupt), false);
+//    }
+//
+//    #[repr(C)]
+//    #[derive(Debug, Copy, Clone)]
+//    struct Buffer {
+//        data: [u8; 16],
+//    }
+//
+//    #[repr(C)]
+//    #[derive(Debug)]
+//    struct VirtQueue {
+//        descriptors: [DescriptorEntry; 8],
+//        available_flags: AvailableFlags,
+//        available_idx: u16,
+//        available_ring: [AvailableEntry; 8],
+//        used_flags: UsedFlags,
+//        used_idx: u16,
+//        used_ring: [UsedEntry; 8],
+//        buffers: [Buffer; 8],
+//    }
+//
+//    fn make_virtqueue() -> Box<VirtQueue> {
+//        let mut v = Box::new(VirtQueue {
+//            descriptors: [DescriptorEntry {
+//                addr: 0,
+//                len: 0,
+//                flags: DescriptorFlags(0),
+//                next: 0,
+//            }; 8],
+//            available_flags: AvailableFlags(0),
+//            available_idx: 0,
+//            available_ring: [AvailableEntry { idx: 0 }; 8],
+//            used_flags: UsedFlags(0),
+//            used_idx: 0,
+//            used_ring: [UsedEntry { idx: 0, len: 0 }; 8],
+//            buffers: [Buffer { data: [0u8; 16] }; 8],
+//        });
+//
+//        // See http://docs.oasis-open.org/virtio/virtio/v1.0/virtio-v1.0.pdf
+//        // section 3.2.1.1 Placing Buffers Into The Descriptor Table
+//        for idx in 0..8 {
+//            v.descriptors[idx].addr = &v.buffers[idx].data[0] as *const _ as u64;
+//            v.descriptors[idx].len = v.buffers[idx].data.len() as u32;
+//            v.descriptors[idx].flags.set(DescriptorFlag::Write);
+//            if idx < 7 {
+//                v.descriptors[idx].next = (idx + 1) as u16;
+//                v.descriptors[idx].flags.set(DescriptorFlag::Next);
+//            }
+//        }
+//
+//        v
+//    }
+//
+//    #[test]
+//    fn get_descriptors() {
+//        let backing = make_virtqueue();
+//        let backing_pointer = Box::into_raw(backing);
+//        let mut hq = unsafe { HostVring::new(backing_pointer as usize, 8, 1) };
+//
+//        for i in 0..8 {
+//            hq.give_to_guest(|entry| {
+//                assert!(entry.flags.is_clear(DescriptorFlag::Next));
+//                // Buffer is not device writable, we (the host) are writing it
+//                entry.flags.clear(DescriptorFlag::Write);
+//                {
+//                    let buffer = entry.get_buffer_mut();
+//                    buffer[0] = i as u8;
+//                    buffer[1] = (i + 1) as u8;
+//                    buffer[2] = (i + 2) as u8;
+//                }
+//                entry.len = 3;
+//            }).unwrap();
+//        }
+//
+//        // We should now be out of memory
+//        assert!(hq.give_to_guest(|_| {}).is_err());
+//
+//        // Now pretend we are the guest, processing these packets.
+//        let mut vq = unsafe { GuestVring::new(backing_pointer as usize, 8, 1) };
+//        for i in 0..8 {
+//            vq.process(|entry| {
+//                assert!(entry.flags.is_clear(DescriptorFlag::Write));
+//                assert!(entry.flags.is_clear(DescriptorFlag::Next));
+//                let buffer = entry.get_buffer();
+//                assert_eq!(buffer.len(), 3);
+//                assert_eq!(buffer[0], i);
+//                assert_eq!(buffer[1], i + 1);
+//                assert_eq!(buffer[2], i + 2);
+//            }).unwrap();
+//        }
+//
+//        // for _i in 0..8 {
+//        //     hq.take_from_guest(|entry| {
+//        //         assert!(entry.flags.is_clear(DescriptorFlag::Next));
+//        //     }).unwrap();
+//        // }
+//
+//        let _backing = unsafe { Box::from_raw(backing_pointer) };
+//    }
+//}

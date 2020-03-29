@@ -39,6 +39,7 @@ pub use super::string::String32;
 /// The types of entry you can have in a Resource Table.
 #[repr(u32)]
 #[derive(Debug)]
+#[allow(dead_code)]
 pub enum ResourceType {
     /// Get the host to allocate you some memory
     CARVEOUT = 0,

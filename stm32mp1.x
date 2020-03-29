@@ -28,7 +28,7 @@ MEMORY
   FLASH        (RWX) : ORIGIN = 0x10000000, LENGTH = 64K
   RAM          (RW)  : ORIGIN = 0x10020000, LENGTH = 64K - 16K
   TRACE_DATA   (RW)  : ORIGIN = 0x1002C000, LENGTH = 16K
-  IPC_DATA     (RW)  : ORIGIN = 0x10040000, LENGTH = 32K
+  IPC_DATA     (RW)  : ORIGIN = 0x10040000, LENGTH = 4K + 4K + 16K
 }
 
 /* # Entry point = reset vector */

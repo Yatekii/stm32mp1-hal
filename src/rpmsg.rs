@@ -1,48 +1,8 @@
-//! # Remote Proc Messaging
-//!
-//! Copyright (c) 2018, Cambridge Consultants Ltd.
-//! See the top-level README.md for licence details.
-//!
-//! This module implements the Linux kernel remoteproc messaging (rpmsg)
-//! functionality.
-//!
-//! These messages are exchanged over a pair of VirtIO vrings. This
-//! implementation is developed and tested on an AM5728 powered Beagleboard
-//! X15 running the TI kernel branch, version
-//! linux-4.9.69+gitAUTOINC+9ce43c71ae-g9ce43c71ae.
-
 #![allow(dead_code)]
 
-// ****************************************************************************
-//
-// Imports
-//
-// ****************************************************************************
 
 pub use super::string::String32;
 use vring;
-
-// ****************************************************************************
-//
-// Sub-modules
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Macros
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Public Types / Traits
-//
-// ****************************************************************************
 
 pub struct Transport {
     send_channel: vring::GuestVring,
@@ -102,12 +62,6 @@ impl From<vring::Error> for Error {
     }
 }
 
-// ****************************************************************************
-//
-// Public Data
-//
-// ****************************************************************************
-
 pub const MBOX_READY: u32 = 0xFFFFFF00;
 pub const MBOX_PENDING_MSG: u32 = 0xFFFFFF01;
 pub const MBOX_CRASH: u32 = 0xFFFFFF02;
@@ -121,27 +75,6 @@ pub const MBOX_HIBERNATION_FORCE: u32 = 0xFFFFFF11;
 pub const MBOX_HIBERNATION_ACK: u32 = 0xFFFFFF12;
 pub const MBOX_HIBERNATION_CANCEL: u32 = 0xFFFFFF13;
 
-// ****************************************************************************
-//
-// Private Types / Traits
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Private Data
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// Public Functions
-//
-// ****************************************************************************
 
 impl ::core::fmt::Debug for Transport {
     fn fmt(&self, fmt: &mut ::core::fmt::Formatter) -> ::core::fmt::Result {
@@ -240,17 +173,3 @@ impl Header {
         }
     }
 }
-
-// ****************************************************************************
-//
-// Private Functions
-//
-// ****************************************************************************
-
-// None
-
-// ****************************************************************************
-//
-// End Of File
-//
-// ****************************************************************************
