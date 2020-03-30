@@ -15,7 +15,7 @@ use rpmsg::SendMessage;
 
 pub use stm32mp1_pac as target;
 pub use target::interrupt;
-
+use cortex_m_rt::{entry, exception};
 
 #[macro_use]
 mod resource_table;
@@ -123,24 +123,6 @@ pub unsafe extern "C" fn ResetSTM32MP1() -> ! {
 const NUM_ENTRIES: usize = 2;
 const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 4);
 
-//const HOST_ID: u32 = 100;
-//const REMOTE_ID: u32 = 61;
-//const NAMESERVER_ID: u32 = 53;
-
-//const RX_MAILBOX: stm32mp1::MailboxDefinition = stm32mp1::MailboxDefinition {
-//    channel: stm32mp1::MailboxChannel::Channel1,
-//    dir: stm32mp1::ChannelDir::Rx,
-//    state: stm32mp1::ChannelState::Reset,
-//    status: stm32mp1::ChannelStatus::Free,
-//};
-//
-//const TX_MAILBOX: stm32mp1::MailboxLocation = stm32mp1::MailboxDefinition = stm32mp1::MailboxDefinition {
-//    channel: stm32mp1::MailboxChannel::Channel2,
-//    dir: stm32mp1::ChannelDir::Tx,
-//    state: stm32mp1::ChannelState::Reset,
-//    status: stm32mp1::ChannelStatus::Free,
-//};
-
 //static mut MAILBOX_FIFO: Fifo<u32> = Fifo {
 //    storage: [0; 64],
 //    read: 0,
@@ -153,44 +135,155 @@ const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 
 //
 // ****************************************************************************
 
-#[cortex_m_rt::entry]
+fn init_ipcc() {
+    let mut core_peripherals = unsafe { target::CorePeripherals::steal() };
+    let peripherals = unsafe { target::Peripherals::steal() };
+
+    // Initializing IPCC
+    // Enable TX and RX interrupts for both channels
+    peripherals.IPCC
+        .c2cr
+        .write_with_zero(|w|
+            w
+                .txfie().set_bit()
+                .rxoie().set_bit()
+        );
+
+    // Set channels free
+    // TODO: modify PAC to add other channels
+    peripherals.IPCC
+        .c2scr
+        .write(|w|
+            w
+                .ch1c().set_bit()
+                .ch2c().set_bit()
+        );
+
+    // Unmask TX and RX interrupt on both available channels
+    // TODO: there should be 6 channels, there is only 2 in the PAC, fix that
+    peripherals.IPCC
+        .c2mr
+        .write(|w|
+            w
+                .ch1om().clear_bit()
+                .ch2om().clear_bit()
+                .ch1fm().clear_bit()
+                .ch2fm().clear_bit()
+        );
+
+    // Enable interrupts for IPCC RX
+    core_peripherals.NVIC.enable(target::Interrupt::IPCC_RX1);
+}
+
+
+// TODO: add other channels
+enum IpccChannel {
+    Channel1,
+    Channel2,
+}
+
+enum IpccDirection {
+    Tx,
+    Rx,
+}
+
+enum IpccStatus {
+    Free,
+    Occupied,
+}
+
+fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> IpccStatus {
+    let peripherals = unsafe { target::Peripherals::steal() };
+    let ipcc = &peripherals.IPCC;
+
+    let register = match direction {
+        IpccDirect::Tx => &ipcc.c2toc1sr,
+        IpccDirect::Rx => &ipcc.c1toc2sr,
+    };
+
+    let status = match channel {
+        IpccChannel::Channel1 => register.read().ch1f().bit(),
+        IpccChannel::Channel2 => register.read().ch2f().bit(),
+    };
+
+    match status {
+        true => IpccStatus::Occupied,
+        false => IpccStatus::Free,
+    }
+}
+
+fn ipcc_notify_cpu(channel: IpccChannel, direction: IpccDirection) {
+    let peripherals = unsafe { target::Peripherals::steal() };
+    let ipcc = &peripherals.IPCC;
+
+    ipcc.c2scr.modify(|r, w|
+        match direction {
+            IpccDirection::Tx => {
+                match channel {
+                    IpccChannel::Channel1 => w.ch1s().set_bit(),
+                    IpccChannel::Channel2 => w.ch2s().set_bit(),
+                }
+            },
+            IpccDirection::Rx => {
+                match channel {
+                    IpccChannel::Channel1 => w.ch1c().set_bit(),
+                    IpccChannel::Channel2 => w.ch2c().set_bit(),
+                }
+            },
+        }
+    );
+}
+
+#[entry]
 fn main() -> ! {
+    // Retrieve the trace singleton
+    let mut t = unsafe { trace::steal_trace() };
+
+    // Retrieve the peripherals
+    let mut core_peripherals = unsafe { target::CorePeripherals::steal() };
+    let peripherals = unsafe { target::Peripherals::steal() };
+
+
+    peripherals.RCC
+        .rcc_mc_ahb3ensetr
+        .write(|w|
+            w
+                // Enable clock for the HSEM block
+                .hsemen().set_bit()
+                // Enable clock for the IPCC
+                .ipccen().set_bit()
+        );
+    // Enable clock for the GPIO
+    peripherals.RCC
+        .rcc_mc_ahb4ensetr
+        .write(|w| w.gpioden().set_bit());
+
+    // TODO: put in other function
+    // Setup the LED7 on the devboard
+    // TODO: rename `i` to `LED7` or something
     let i = 7;
     let offset = 2 * i;
-    unsafe {
-        &(*target::RCC::ptr())
-            .rcc_mc_ahb3ensetr
-            .write(|w| w.hsemen().set_bit());
-        &(*target::RCC::ptr())
-            .rcc_mc_ahb3ensetr
-            .write(|w| w.ipccen().set_bit());
-        &(*target::RCC::ptr())
-            .rcc_mc_ahb4ensetr
-            .write(|w| w.gpioden().set_bit());
-
-        &(*target::GPIOH::ptr())
-            .gpiox_pupdr
-            .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
-        &(*target::GPIOH::ptr())
-            .gpiox_otyper
-            .modify(|r, w| w.bits(r.bits() & !(0b1 << i)));
-        &(*target::GPIOH::ptr())
-            .gpiox_moder
-            .modify(|r, w| w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)));
-        &(*target::GPIOH::ptr())
-            .gpiox_bsrr
-            .write(|w| w.bits(0 << i));
-    }
-
-    let t = trace::get_trace().unwrap();
+    peripherals.GPIOH
+        .gpiox_pupdr
+        .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)) } );
+    peripherals.GPIOH
+        .gpiox_otyper
+        .modify(|r, w| unsafe { w.bits(r.bits() & !(0b1 << i)) } );
+    peripherals.GPIOH
+        .gpiox_moder
+        .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)) } );
+    peripherals.GPIOH
+        .gpiox_bsrr
+        .write(|w| unsafe { w.bits(0 << i) } );
 
     writeln!(t, "Setup complete. Booting {:?}", version::version()).unwrap();
 
-    unsafe {
-        &(*target::GPIOH::ptr())
-            .gpiox_bsrr
-            .write(|w| w.bits(1 << 8))
-    };
+    // Turn on the LED7
+    peripherals.GPIOH
+        .gpiox_bsrr
+        .write(|w| unsafe { w.bits(1 << i) } );
+
+    // Configure vrings
 
     // This vring is full of available buffers we can use to send
     // data back to the host.
@@ -213,51 +306,32 @@ fn main() -> ! {
     };
 
     // Spin until status is OK
-    {
-        const BUFS_PRIMED: u8 = vring::VIRTIO_CONFIG_S_ACKNOWLEDGE
-            | vring::VIRTIO_CONFIG_S_DRIVER
-            | vring::VIRTIO_CONFIG_S_DRIVER_OK;
-        let status_ptr = &RESOURCE_TABLE.rpmsg_vdev.status as *const u8;
-        loop {
-            // Volatile read as we're in a loop
-            let status = unsafe { ::core::ptr::read_volatile(status_ptr) };
-            writeln!(t, "Buffer status is {}", status).unwrap();
-            if status == BUFS_PRIMED {
-                break;
-            } else {
-                for _ in 0..10_000 {
-                    cortex_m::asm::nop();
-                }
+    const BUFS_PRIMED: u8 = vring::VIRTIO_CONFIG_S_ACKNOWLEDGE
+        | vring::VIRTIO_CONFIG_S_DRIVER
+        | vring::VIRTIO_CONFIG_S_DRIVER_OK;
+    let status_ptr = &RESOURCE_TABLE.rpmsg_vdev.status as *const u8;
+    loop {
+        // Volatile read as we're in a loop
+        let status = unsafe { ::core::ptr::read_volatile(status_ptr) };
+        writeln!(t, "Buffer status is {}", status).unwrap();
+        if status == BUFS_PRIMED {
+            break;
+        } else {
+            for _ in 0..10_000 {
+                cortex_m::asm::nop();
             }
         }
     }
 
+    // Prepare the rpmsg transport interface
     let mut transport = rpmsg::Transport::new(ipu_to_host, host_to_ipu);
     let res = register_proto(&mut transport);
     writeln!(t, "Registered proto {:?}", res).unwrap();
     writeln!(t, "Transport is now: \n{:#?}", transport).unwrap();
 
-    unsafe {
-        // Unmask RX interrupt
-        // TODO: update PAC to add other channels, there is only 1 & 2 atm
-        &(*target::IPCC::ptr())
-            .c2mr
-            .write(|w| w.ch1om().set_bit());
-        &(*target::IPCC::ptr())
-            .c2mr
-            .write(|w| w.ch2om().set_bit());
-        // Enable interrupts
-        cortex_m::interrupt::enable();
-    }
+    init_ipcc();
 
-    let mut i : u32 = 0;
-    loop {
-        writeln!(t, "Hello from Rust {}!", i).unwrap();
-        i = i.wrapping_add(1);
-        for _ in 0..1_000_000 {
-            cortex_m::asm::nop();
-        }
-    }
+    loop {}
 
 //        let mut loops: u32 = 0;
 //        loop {
@@ -324,19 +398,42 @@ fn register_proto(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::Error>
         rpmsg::NameServiceAnnounceFlags::Create,
     );
     let res = transport.send(1, 0, &msg);
-    // TODO: send message
+
+    let peripherals = unsafe { target::Peripherals::steal() };
+    peripherals.IPCC
+        .c2cr
+        .write(|w| w.txfie().set_bit());
+
+    peripherals.IPCC
+        .c2mr
+        .write(|w| w.ch1fm().set_bit());
+
+    peripherals.IPCC
+        .c2scr
+        .write(|w| w.ch1s().set_bit());
+
+    // TODO: the PAC is not generating proper field for this register
+//    peripherals.IPCC
+//        .c2toc1sr
+//        .write(|w| unsafe { w.bits(0) } );
+
+
+//    IPCC_C1CR.TXFIE
+//    IPCC_C1MR.CHnFM
+//    IPCC_C1SCR.CHnS
+//    IPCC_C1TOC2SR.CHnF
+
     res
 }
 
-fn send_IPCC_msg()
-{
-    unsafe {
+//fn send_IPCC_msg()
+//{
+//    unsafe {
 //        &(*target::IPCC::ptr())
 //            .
 //            .write(|w| w.bits(1 << 8))
-    };
-
-}
+//    };
+//}
 
 //// Convert the addresses in the vring to addresses we can actually read
 //fn address_map(physical_address: u64) -> u64 {
