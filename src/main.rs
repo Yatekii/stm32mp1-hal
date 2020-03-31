@@ -111,23 +111,23 @@ pub unsafe extern "C" fn ResetSTM32MP1() -> ! {
 //    offset: usize,
 //}
 
-//struct Fifo<T>
-//where
-//    T: Copy,
-//{
-//    storage: [T; 64],
-//    write: u8,
-//    read: u8,
-//}
+struct Fifo<T>
+where
+    T: Copy,
+{
+    storage: [T; 64],
+    write: u8,
+    read: u8,
+}
 
 const NUM_ENTRIES: usize = 2;
 const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 4);
 
-//static mut MAILBOX_FIFO: Fifo<u32> = Fifo {
-//    storage: [0; 64],
-//    read: 0,
-//    write: 0,
-//};
+static mut MAILBOX_FIFO: Fifo<u32> = Fifo {
+    storage: [0; 64],
+    read: 0,
+    write: 0,
+};
 
 // ****************************************************************************
 //
@@ -136,43 +136,33 @@ const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 
 // ****************************************************************************
 
 fn init_ipcc() {
-    let mut core_peripherals = unsafe { target::CorePeripherals::steal() };
     let peripherals = unsafe { target::Peripherals::steal() };
 
     // Initializing IPCC
     // Enable TX and RX interrupts for both channels
-    peripherals.IPCC
-        .c2cr
-        .write_with_zero(|w|
-            w
-                .txfie().set_bit()
-                .rxoie().set_bit()
-        );
+    peripherals.IPCC.c2cr.write_with_zero(|w|
+        w
+        .txfie().set_bit()
+        .rxoie().set_bit()
+    );
 
     // Set channels free
     // TODO: modify PAC to add other channels
-    peripherals.IPCC
-        .c2scr
-        .write(|w|
-            w
-                .ch1c().set_bit()
-                .ch2c().set_bit()
-        );
+    peripherals.IPCC.c2scr.write(|w|
+        w
+        .ch1c().set_bit()
+        .ch2c().set_bit()
+    );
 
     // Unmask TX and RX interrupt on both available channels
     // TODO: there should be 6 channels, there is only 2 in the PAC, fix that
-    peripherals.IPCC
-        .c2mr
-        .write(|w|
-            w
-                .ch1om().clear_bit()
-                .ch2om().clear_bit()
-                .ch1fm().clear_bit()
-                .ch2fm().clear_bit()
-        );
-
-    // Enable interrupts for IPCC RX
-    core_peripherals.NVIC.enable(target::Interrupt::IPCC_RX1);
+    peripherals.IPCC.c2mr.write(|w|
+        w
+        .ch1om().clear_bit()
+        .ch2om().clear_bit()
+        .ch1fm().clear_bit()
+        .ch2fm().clear_bit()
+    );
 }
 
 
@@ -192,18 +182,59 @@ enum IpccStatus {
     Occupied,
 }
 
+fn ipcc_unmask_channel(channel: IpccChannel, direction: IpccDirection) {
+    let peripherals = unsafe { target::Peripherals::steal() };
+    let mask_reg = &peripherals.IPCC.c2mr;
+
+    match direction {
+        IpccDirection::Tx => {
+            match channel {
+                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1fm().clear_bit()),
+                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2fm().clear_bit()),
+            }
+        },
+        IpccDirection::Rx => {
+            match channel {
+                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1om().clear_bit()),
+                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2om().clear_bit()),
+            }
+        }
+    }
+}
+
+fn ipcc_mask_channel(channel: IpccChannel, direction: IpccDirection) {
+    let peripherals = unsafe { target::Peripherals::steal() };
+    let mask_reg = &peripherals.IPCC.c2mr;
+
+    match direction {
+        IpccDirection::Tx => {
+            match channel {
+                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1fm().set_bit()),
+                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2fm().set_bit()),
+            }
+        },
+        IpccDirection::Rx => {
+            match channel {
+                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1om().set_bit()),
+                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2om().set_bit()),
+            }
+        }
+    }
+}
+
 fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> IpccStatus {
     let peripherals = unsafe { target::Peripherals::steal() };
     let ipcc = &peripherals.IPCC;
 
-    let register = match direction {
-        IpccDirection::Tx => &ipcc.c2toc1sr,
-        IpccDirection::Rx => &ipcc.c1toc2sr,
-    };
-
-    let status = match channel {
-        IpccChannel::Channel1 => register.read().ch1f().bit(),
-        IpccChannel::Channel2 => register.read().ch2f().bit(),
+    let status = match direction {
+        IpccDirection::Tx => match channel {
+                IpccChannel::Channel1 => ipcc.c2toc1sr.read().ch1f().bit(),
+                IpccChannel::Channel2 => ipcc.c2toc1sr.read().ch1f().bit(),
+        },
+        IpccDirection::Rx => match channel {
+                IpccChannel::Channel1 => ipcc.c1toc2sr.read().ch1f().bit(),
+                IpccChannel::Channel2 => ipcc.c1toc2sr.read().ch2f().bit(),
+        },
     };
 
     match status {
@@ -212,26 +243,48 @@ fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> Ip
     }
 }
 
+fn ipcc_set_channel_status(channel: IpccChannel, direction: IpccDirection, status: IpccStatus) {
+    let peripherals = unsafe { target::Peripherals::steal() };
+    let ipcc = &peripherals.IPCC;
+
+    match direction {
+        IpccDirection::Tx => match status {
+            IpccStatus::Free => match channel {
+                IpccChannel::Channel1 => ipcc.c2toc1sr.write(|w| w.ch1f().clear_bit()),
+                IpccChannel::Channel2 => ipcc.c2toc1sr.write(|w| w.ch2f().clear_bit()),
+            },
+            IpccStatus::Occupied => match channel {
+                IpccChannel::Channel1 => ipcc.c2toc1sr.write(|w| w.ch1f().set_bit()),
+                IpccChannel::Channel2 => ipcc.c2toc1sr.write(|w| w.ch2f().set_bit()),
+            },
+        },
+        IpccDirection::Rx => match status {
+            IpccStatus::Free => match channel {
+                IpccChannel::Channel1 => ipcc.c1toc2sr.write(|w| w.ch1f().clear_bit()),
+                IpccChannel::Channel2 => ipcc.c1toc2sr.write(|w| w.ch2f().clear_bit()),
+            },
+            IpccStatus::Occupied => match channel {
+                IpccChannel::Channel1 => ipcc.c1toc2sr.write(|w| w.ch1f().set_bit()),
+                IpccChannel::Channel2 => ipcc.c1toc2sr.write(|w| w.ch2f().set_bit()),
+            },
+        },
+    };
+}
+
 fn ipcc_notify_cpu(channel: IpccChannel, direction: IpccDirection) {
     let peripherals = unsafe { target::Peripherals::steal() };
     let ipcc = &peripherals.IPCC;
 
-    ipcc.c2scr.modify(|r, w|
-        match direction {
-            IpccDirection::Tx => {
-                match channel {
-                    IpccChannel::Channel1 => w.ch1s().set_bit(),
-                    IpccChannel::Channel2 => w.ch2s().set_bit(),
-                }
-            },
-            IpccDirection::Rx => {
-                match channel {
-                    IpccChannel::Channel1 => w.ch1c().set_bit(),
-                    IpccChannel::Channel2 => w.ch2c().set_bit(),
-                }
-            },
-        }
-    );
+    ipcc.c2scr.modify(|r, w| match direction {
+        IpccDirection::Tx => match channel {
+            IpccChannel::Channel1 => w.ch1s().set_bit(),
+            IpccChannel::Channel2 => w.ch2s().set_bit(),
+        },
+        IpccDirection::Rx => match channel {
+            IpccChannel::Channel1 => w.ch1c().set_bit(),
+            IpccChannel::Channel2 => w.ch2c().set_bit(),
+        },
+    });
 }
 
 #[entry]
@@ -329,63 +382,61 @@ fn main() -> ! {
     writeln!(t, "Registered proto {:?}", res).unwrap();
     writeln!(t, "Transport is now: \n{:#?}", transport).unwrap();
 
-    init_ipcc();
+//    init_ipcc();
 
-    loop {}
+    // Enable interrupts for IPCC RX
+    core_peripherals.NVIC.enable(target::Interrupt::IPCC_RX1);
 
-//        let mut loops: u32 = 0;
-//        loop {
-//            loops = loops.wrapping_add(1);
-//            let popped = cortex_m::interrupt::free(|_cs| unsafe { MAILBOX_FIFO.pop() });
-//            if let Some(msg) = popped {
-//                if (loops % 1000) == 0 {
-//                    writeln!(t, "Rx message {}", loops).unwrap();
-//                }
-//                match msg {
-//                    rpmsg::MBOX_READY => {
-//                        writeln!(t, "{}: Ready received.", loops).unwrap();
-//                    }
-//                    rpmsg::MBOX_ECHO_REQUEST => {
-//                        writeln!(t, "{}: Echo request received, sending reply.", loops).unwrap();
-//                        chip.send_message(rpmsg::MBOX_ECHO_REPLY, TX_MAILBOX);
-//                    }
-//                    1 => {
-//                        let res_rx = transport.receive(|mut tx, _header, _payload| {
-//                            // writeln!(t, "Got: {:?}, {:x?}", _header, _payload).unwrap();
-//                            let mut buffer = [0u8; 64];
-//                            {
-//                                let mut writer = BufferWriter::new(&mut buffer);
-//                                write!(writer, "Response to message {}", loops).unwrap();
-//                            }
-//                            tx.send(REMOTE_ID, HOST_ID, &buffer)
-//                                .expect("Failed to send");
-//                            chip.send_message(0, TX_MAILBOX);
-//                        });
-//                        match res_rx {
-//                            Ok(()) => {
-//                                // writeln!(t, "{}: Message processed", loops).unwrap();
-//                            }
-//                            Err(rpmsg::Error::Empty) => {
-//                                writeln!(t, "{}: Queue empty??", loops).unwrap();
-//                            }
-//                            Err(e) => {
-//                                writeln!(t, "{}: Transport error: {:?}", loops, e).unwrap();
-//                            }
-//                        }
-//                    }
-//                    0 => {
-//                        // Ignore - letting us know about space on the to-host ring
-//                        // writeln!(t, "{}: Ignoring space indication.", loops).unwrap();
-//                    }
-//                    m => {
-//                        writeln!(t, "{}: Unexpected message ID 0x{:08x}.", loops, m).unwrap();
-//                    }
-//                }
-//            } else {
-//                // Wait for stuff to happen...
-//                cortex_m::asm::wfe();
-//            }
-//        }
+    let mut loops: u32 = 0;
+    loop {
+        loops = loops.wrapping_add(1);
+        let popped = cortex_m::interrupt::free(|_cs| unsafe { MAILBOX_FIFO.pop() });
+        if let Some(msg) = popped {
+            match msg {
+                rpmsg::MBOX_READY => {
+                    writeln!(t, "{}: Ready received.", loops).unwrap();
+                }
+                rpmsg::MBOX_ECHO_REQUEST => {
+                    writeln!(t, "{}: Echo request received, sending reply.", loops).unwrap();
+                    chip.send_message(rpmsg::MBOX_ECHO_REPLY, TX_MAILBOX);
+                }
+                1 => {
+                    let res_rx = transport.receive(|mut tx, _header, _payload| {
+                        // writeln!(t, "Got: {:?}, {:x?}", _header, _payload).unwrap();
+                        let mut buffer = [0u8; 64];
+                        {
+                            let mut writer = BufferWriter::new(&mut buffer);
+                            write!(writer, "Response to message {}", loops).unwrap();
+                        }
+                        tx.send(REMOTE_ID, HOST_ID, &buffer)
+                            .expect("Failed to send");
+                        chip.send_message(0, TX_MAILBOX);
+                    });
+                    match res_rx {
+                        Ok(()) => {
+                            // writeln!(t, "{}: Message processed", loops).unwrap();
+                        }
+                        Err(rpmsg::Error::Empty) => {
+                            writeln!(t, "{}: Queue empty??", loops).unwrap();
+                        }
+                        Err(e) => {
+                            writeln!(t, "{}: Transport error: {:?}", loops, e).unwrap();
+                        }
+                    }
+                }
+                0 => {
+                    // Ignore - letting us know about space on the to-host ring
+                    // writeln!(t, "{}: Ignoring space indication.", loops).unwrap();
+                }
+                m => {
+                    writeln!(t, "{}: Unexpected message ID 0x{:08x}.", loops, m).unwrap();
+                }
+            }
+        } else {
+            // Wait for stuff to happen...
+            cortex_m::asm::wfe();
+        }
+    }
 }
 
 /// Register an rpmsg protocol
@@ -412,70 +463,29 @@ fn register_proto(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::Error>
         .c2scr
         .write(|w| w.ch1s().set_bit());
 
-    // TODO: the PAC is not generating proper field for this register
-//    peripherals.IPCC
-//        .c2toc1sr
-//        .write(|w| unsafe { w.bits(0) } );
-
-
-//    IPCC_C1CR.TXFIE
-//    IPCC_C1MR.CHnFM
-//    IPCC_C1SCR.CHnS
-//    IPCC_C1TOC2SR.CHnF
-
+    ipcc_notify_cpu(IpccChannel::Channel1, IpccDirection::Tx);
     res
 }
 
-//fn send_IPCC_msg()
-//{
-//    unsafe {
-//        &(*target::IPCC::ptr())
-//            .
-//            .write(|w| w.bits(1 << 8))
-//    };
-//}
-
-//// Convert the addresses in the vring to addresses we can actually read
-//fn address_map(physical_address: u64) -> u64 {
-//    RESOURCE_TABLE.pa_to_da(physical_address as usize).unwrap() as u64
-//}
-
-// // define the hard fault handler
-// cortex_m_rt::exception!(HardFault, hard_fault);
-
-// /// Our default hard fault handler
-// #[cortex_m_rt::exception]
-// fn hard_fault(ef: &cortex_m_rt::ExceptionFrame) -> ! {
-//     panic!("HardFault at {:#?}", ef);
-// }
-
-// // define the default exception handler
-// cortex_m_rt::exception!(*, default_handler);
-
-///// Our default interrupt handler
-//fn default_handler(irqn: i16) {
-//    panic!("Unhandled exception (IRQn = {})", irqn);
-//}
-
 #[interrupt]
 fn IPCC_RX1() {
-    let t = trace::get_trace().unwrap();
-    writeln!(t, "TEST !!!").unwrap();
-}
+    for channel in IpccChannel {
+        let rx_status = ipcc_get_channel_status(channel, IpccDirection::Rx);
+        if rx_status == IpccStatus::Occupied {
+            // Mask the interrupt
+            ipcc_mask_channel(channel, IpccDirection::Rx);
 
-//    unsafe {
-//        // We have to do the read in the interrupt otherwise we'll bounce straight back in to this ISR
-//        let mailbox =
-//            stm32mp1::get_mailbox(RX_MAILBOX.id, &RESOURCE_TABLE).expect("Bad resource_table in IRQ");
-//        if let Some(id) = mailbox.get_message(RX_MAILBOX.slot) {
-//            MAILBOX_FIFO.push(id);
-//            // Clear the interrupt flag
-//            mailbox.clear_interrupts(RX_MAILBOX.user);
-//            // Set event to wake from wfe, in case this occurs just after the FIFO
-//            // check but just before we enter wfe.
-//            cortex_m::asm::sev();
-//        }
-//    };
+            // Retrieve the data here
+
+//            unsafe { MAILBOX_FIFO.push(1) };
+
+            // Notify the CPU that the channel is free
+            ipcc_notify_cpu(channel, IpccDirection::Rx);
+            ipcc_set_channel_status(channel, IpccDirection::Rx, IpccStatus::Free);
+            ipcc_mask_channel(channel, IpccDirection::Rx);
+        }
+    }
+}
 
 
 #[panic_handler]
@@ -510,24 +520,24 @@ pub fn panic(info: &PanicInfo) -> ! {
 //    }
 //}
 
-//impl<T> Fifo<T>
-//where
-//    T: Copy,
-//{
-//    pub fn push(&mut self, data: T) {
-//        let write_idx = self.write as usize % self.storage.len();
-//        self.storage[write_idx] = data;
-//        self.write = self.write.wrapping_add(1);
-//    }
-//
-//    pub fn pop(&mut self) -> Option<T> {
-//        if self.read == self.write {
-//            None
-//        } else {
-//            let read_idx = self.read as usize % self.storage.len();
-//            let data = self.storage[read_idx];
-//            self.read = self.read.wrapping_add(1);
-//            Some(data)
-//        }
-//    }
-//}
+impl<T> Fifo<T>
+where
+    T: Copy,
+{
+    pub fn push(&mut self, data: T) {
+        let write_idx = self.write as usize % self.storage.len();
+        self.storage[write_idx] = data;
+        self.write = self.write.wrapping_add(1);
+    }
+
+    pub fn pop(&mut self) -> Option<T> {
+        if self.read == self.write {
+            None
+        } else {
+            let read_idx = self.read as usize % self.storage.len();
+            let data = self.storage[read_idx];
+            self.read = self.read.wrapping_add(1);
+            Some(data)
+        }
+    }
+}
