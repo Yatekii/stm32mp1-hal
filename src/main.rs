@@ -16,6 +16,7 @@ use rpmsg::SendMessage;
 pub use stm32mp1_pac as target;
 pub use target::interrupt;
 use cortex_m_rt::{entry, exception};
+use core::borrow::Borrow;
 
 #[macro_use]
 mod resource_table;
@@ -167,16 +168,19 @@ fn init_ipcc() {
 
 
 // TODO: add other channels
+#[derive(Copy,Clone,PartialEq)]
 enum IpccChannel {
     Channel1,
     Channel2,
 }
 
+#[derive(Copy,Clone,PartialEq)]
 enum IpccDirection {
     Tx,
     Rx,
 }
 
+#[derive(Copy,Clone,PartialEq)]
 enum IpccStatus {
     Free,
     Occupied,
@@ -241,34 +245,6 @@ fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> Ip
         true => IpccStatus::Occupied,
         false => IpccStatus::Free,
     }
-}
-
-fn ipcc_set_channel_status(channel: IpccChannel, direction: IpccDirection, status: IpccStatus) {
-    let peripherals = unsafe { target::Peripherals::steal() };
-    let ipcc = &peripherals.IPCC;
-
-    match direction {
-        IpccDirection::Tx => match status {
-            IpccStatus::Free => match channel {
-                IpccChannel::Channel1 => ipcc.c2toc1sr.write(|w| w.ch1f().clear_bit()),
-                IpccChannel::Channel2 => ipcc.c2toc1sr.write(|w| w.ch2f().clear_bit()),
-            },
-            IpccStatus::Occupied => match channel {
-                IpccChannel::Channel1 => ipcc.c2toc1sr.write(|w| w.ch1f().set_bit()),
-                IpccChannel::Channel2 => ipcc.c2toc1sr.write(|w| w.ch2f().set_bit()),
-            },
-        },
-        IpccDirection::Rx => match status {
-            IpccStatus::Free => match channel {
-                IpccChannel::Channel1 => ipcc.c1toc2sr.write(|w| w.ch1f().clear_bit()),
-                IpccChannel::Channel2 => ipcc.c1toc2sr.write(|w| w.ch2f().clear_bit()),
-            },
-            IpccStatus::Occupied => match channel {
-                IpccChannel::Channel1 => ipcc.c1toc2sr.write(|w| w.ch1f().set_bit()),
-                IpccChannel::Channel2 => ipcc.c1toc2sr.write(|w| w.ch2f().set_bit()),
-            },
-        },
-    };
 }
 
 fn ipcc_notify_cpu(channel: IpccChannel, direction: IpccDirection) {
@@ -382,7 +358,7 @@ fn main() -> ! {
     writeln!(t, "Registered proto {:?}", res).unwrap();
     writeln!(t, "Transport is now: \n{:#?}", transport).unwrap();
 
-//    init_ipcc();
+    init_ipcc();
 
     // Enable interrupts for IPCC RX
     core_peripherals.NVIC.enable(target::Interrupt::IPCC_RX1);
@@ -392,46 +368,49 @@ fn main() -> ! {
         loops = loops.wrapping_add(1);
         let popped = cortex_m::interrupt::free(|_cs| unsafe { MAILBOX_FIFO.pop() });
         if let Some(msg) = popped {
-            match msg {
-                rpmsg::MBOX_READY => {
-                    writeln!(t, "{}: Ready received.", loops).unwrap();
-                }
-                rpmsg::MBOX_ECHO_REQUEST => {
-                    writeln!(t, "{}: Echo request received, sending reply.", loops).unwrap();
-                    chip.send_message(rpmsg::MBOX_ECHO_REPLY, TX_MAILBOX);
-                }
-                1 => {
-                    let res_rx = transport.receive(|mut tx, _header, _payload| {
-                        // writeln!(t, "Got: {:?}, {:x?}", _header, _payload).unwrap();
-                        let mut buffer = [0u8; 64];
-                        {
-                            let mut writer = BufferWriter::new(&mut buffer);
-                            write!(writer, "Response to message {}", loops).unwrap();
-                        }
-                        tx.send(REMOTE_ID, HOST_ID, &buffer)
-                            .expect("Failed to send");
-                        chip.send_message(0, TX_MAILBOX);
-                    });
-                    match res_rx {
-                        Ok(()) => {
-                            // writeln!(t, "{}: Message processed", loops).unwrap();
-                        }
-                        Err(rpmsg::Error::Empty) => {
-                            writeln!(t, "{}: Queue empty??", loops).unwrap();
-                        }
-                        Err(e) => {
-                            writeln!(t, "{}: Transport error: {:?}", loops, e).unwrap();
-                        }
-                    }
-                }
-                0 => {
-                    // Ignore - letting us know about space on the to-host ring
-                    // writeln!(t, "{}: Ignoring space indication.", loops).unwrap();
-                }
-                m => {
-                    writeln!(t, "{}: Unexpected message ID 0x{:08x}.", loops, m).unwrap();
-                }
-            }
+            let res_rx = transport.receive(|mut tx, header, payload| {
+                writeln!(t, "Got: {:?}, {:x?}", header, payload).unwrap();
+            });
+//            match msg {
+//                rpmsg::MBOX_READY => {
+//                    writeln!(t, "{}: Ready received.", loops).unwrap();
+//                }
+//                rpmsg::MBOX_ECHO_REQUEST => {
+//                    writeln!(t, "{}: Echo request received, sending reply.", loops).unwrap();
+//                    chip.send_message(rpmsg::MBOX_ECHO_REPLY, TX_MAILBOX);
+//                }
+//                1 => {
+//                    let res_rx = transport.receive(|mut tx, _header, _payload| {
+//                        // writeln!(t, "Got: {:?}, {:x?}", _header, _payload).unwrap();
+//                        let mut buffer = [0u8; 64];
+//                        {
+//                            let mut writer = BufferWriter::new(&mut buffer);
+//                            write!(writer, "Response to message {}", loops).unwrap();
+//                        }
+//                        tx.send(REMOTE_ID, HOST_ID, &buffer)
+//                            .expect("Failed to send");
+//                        chip.send_message(0, TX_MAILBOX);
+//                    });
+//                    match res_rx {
+//                        Ok(()) => {
+//                            // writeln!(t, "{}: Message processed", loops).unwrap();
+//                        }
+//                        Err(rpmsg::Error::Empty) => {
+//                            writeln!(t, "{}: Queue empty??", loops).unwrap();
+//                        }
+//                        Err(e) => {
+//                            writeln!(t, "{}: Transport error: {:?}", loops, e).unwrap();
+//                        }
+//                    }
+//                }
+//                0 => {
+//                    // Ignore - letting us know about space on the to-host ring
+//                    // writeln!(t, "{}: Ignoring space indication.", loops).unwrap();
+//                }
+//                m => {
+//                    writeln!(t, "{}: Unexpected message ID 0x{:08x}.", loops, m).unwrap();
+//                }
+//            }
         } else {
             // Wait for stuff to happen...
             cortex_m::asm::wfe();
@@ -469,20 +448,23 @@ fn register_proto(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::Error>
 
 #[interrupt]
 fn IPCC_RX1() {
-    for channel in IpccChannel {
-        let rx_status = ipcc_get_channel_status(channel, IpccDirection::Rx);
+    for channel in [
+        IpccChannel::Channel1,
+        IpccChannel::Channel2,
+    ].iter() {
+        let rx_status = ipcc_get_channel_status(*channel, IpccDirection::Rx);
+
         if rx_status == IpccStatus::Occupied {
             // Mask the interrupt
-            ipcc_mask_channel(channel, IpccDirection::Rx);
+            ipcc_mask_channel(*channel, IpccDirection::Rx);
 
             // Retrieve the data here
-
-//            unsafe { MAILBOX_FIFO.push(1) };
+            unsafe { MAILBOX_FIFO.push(1) };
 
             // Notify the CPU that the channel is free
-            ipcc_notify_cpu(channel, IpccDirection::Rx);
-            ipcc_set_channel_status(channel, IpccDirection::Rx, IpccStatus::Free);
-            ipcc_mask_channel(channel, IpccDirection::Rx);
+            ipcc_notify_cpu(*channel, IpccDirection::Rx);
+//            ipcc_set_channel_status(channel, IpccDirection::Rx, IpccStatus::Free);
+            ipcc_mask_channel(*channel, IpccDirection::Rx);
         }
     }
 }
