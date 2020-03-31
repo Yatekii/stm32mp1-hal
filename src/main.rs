@@ -197,8 +197,8 @@ fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> Ip
     let ipcc = &peripherals.IPCC;
 
     let register = match direction {
-        IpccDirect::Tx => &ipcc.c2toc1sr,
-        IpccDirect::Rx => &ipcc.c1toc2sr,
+        IpccDirection::Tx => &ipcc.c2toc1sr,
+        IpccDirection::Rx => &ipcc.c1toc2sr,
     };
 
     let status = match channel {
