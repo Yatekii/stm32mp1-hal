@@ -233,7 +233,7 @@ fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> Ip
     let status = match direction {
         IpccDirection::Tx => match channel {
                 IpccChannel::Channel1 => ipcc.c2toc1sr.read().ch1f().bit(),
-                IpccChannel::Channel2 => ipcc.c2toc1sr.read().ch1f().bit(),
+                IpccChannel::Channel2 => ipcc.c2toc1sr.read().ch2f().bit(),
         },
         IpccDirection::Rx => match channel {
                 IpccChannel::Channel1 => ipcc.c1toc2sr.read().ch1f().bit(),
@@ -460,6 +460,9 @@ fn IPCC_RX1() {
 
             // Retrieve the data here
             unsafe { MAILBOX_FIFO.push(1) };
+
+            let mut t = unsafe { trace::steal_trace() };
+            let _ = writeln!(t, "Retrieving data");
 
             // Notify the CPU that the channel is free
             ipcc_notify_cpu(*channel, IpccDirection::Rx);
