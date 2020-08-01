@@ -1,0 +1,6 @@
+[package]
+name = "libmetal-embedded"
+version = "0.1.0"
+authors = ["Maxime Borges <contact@amximeborg.es>"]
+
+[dependencies]

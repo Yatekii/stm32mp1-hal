@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! # Trace Buffers
 //!
 //! Copyright (c) 2018, Cambridge Consultants Ltd.

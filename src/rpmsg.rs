@@ -2,7 +2,12 @@
 
 
 pub use super::string::String32;
-use vring;
+use openamp::vring;
+//use alloc::collections::LinkedList;
+
+type EndpointCb= fn(&Endpoint, *const u8, usize, u32, *const u8) -> u32;
+type NameServiceUnbindCb = fn(&Endpoint);
+type NameServiceBindCb = fn(Device, &str, u32);
 
 pub struct Transport {
     send_channel: vring::GuestVring,
@@ -32,12 +37,43 @@ pub struct Header {
 pub struct NameServiceAnnounce {
     /// name of remote service that is published
     name: String32,
-    /// description of remote service that is published
-    description: String32,
     /// address of remote service that is published
     address: u32,
     /// indicates whether service is created or destroyed
     flags: NameServiceAnnounceFlags,
+}
+
+/// RPMsg device operations
+struct DeviceOps {
+    /// send RPMsg data
+    send_offchannel_raw: fn(&Device, u32, u32, *const u8, usize, i32) -> i32,
+}
+
+
+pub struct Device {
+//    endpoints: LinkedList<u32>,
+    ns_ept: Endpoint,
+    bitmap: [u32; 128],
+    ns_bind_cb: NameServiceBindCb,
+    ops: DeviceOps,
+}
+
+pub struct Endpoint {
+    /// name of the service supported
+    name: &'static str,
+    /// pointer to the rpmsg device
+    rdev: &'static Device,
+    /// local address of the endpoint
+    addr: u32,
+    /// address of the default remote endpoint binded.
+    dest_addr: u32,
+    /// user rx callback, return value of this callback is reserved for future use, for now, only allow RPMSG_SUCCESS as return value.
+    cb: EndpointCb,
+    /// end point service service unbind callback, called when remote ept is destroyed.
+    ns_unbind_cb: NameServiceUnbindCb,
+//    /// end point node
+//    node: LinkedList<u32>,
+    priv_data: *const u8,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -148,13 +184,11 @@ impl Transport {
 impl NameServiceAnnounce {
     pub fn new(
         name: &str,
-        description: &str,
         address: u32,
         mode: NameServiceAnnounceFlags,
     ) -> NameServiceAnnounce {
         NameServiceAnnounce {
             name: name.into(),
-            description: description.into(),
             address,
             flags: mode,
         }

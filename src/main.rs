@@ -5,25 +5,32 @@
 extern crate cortex_m;
 extern crate cortex_m_rt;
 extern crate volatile_register;
-extern crate vring;
+extern crate openamp;
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
+use core::marker::PhantomData;
+
+use cortex_m_rt::entry;
+use stm32mp1_pac as target;
+use target::interrupt;
+
+mod trace;
+mod resource_table;
 use resource_table as rt;
 
+mod rpmsg;
 use rpmsg::SendMessage;
 
-pub use stm32mp1_pac as target;
-pub use target::interrupt;
-use cortex_m_rt::{entry, exception};
-use core::borrow::Borrow;
+mod virtio;
+mod rpmsg_virtio;
 
-#[macro_use]
-mod resource_table;
-mod rpmsg;
+use openamp::vring;
+
 mod string;
-mod trace;
-mod version;
+
+mod fifo;
+use fifo::Fifo;
 
 #[repr(C)]
 #[derive(Debug)]
@@ -83,7 +90,6 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
         /// address. We do this by placing it at the start of the ".tracebuffer"
         /// section. Ideally we'd just take the address of our buffer
         /// but that's now allowed in a static variable definition.
-//        da: 0x10056800,
         da: 0x1002C000,
         len: 0x4000,
         reserved: 0,
@@ -107,25 +113,11 @@ pub unsafe extern "C" fn ResetSTM32MP1() -> ! {
     Reset();
 }
 
-//struct BufferWriter<'a> {
-//    buf: &'a mut [u8],
-//    offset: usize,
-//}
-
-struct Fifo<T>
-where
-    T: Copy,
-{
-    storage: [T; 64],
-    write: u8,
-    read: u8,
-}
-
 const NUM_ENTRIES: usize = 2;
 const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 4);
 
-static mut MAILBOX_FIFO: Fifo<u32> = Fifo {
-    storage: [0; 64],
+static mut MAILBOX_FIFO: Fifo<PhantomData<u8>> = Fifo {
+    storage: [PhantomData; fifo::FIFO_SIZE],
     read: 0,
     write: 0,
 };
@@ -168,7 +160,7 @@ fn init_ipcc() {
 
 
 // TODO: add other channels
-#[derive(Copy,Clone,PartialEq)]
+#[derive(Debug,Copy,Clone,PartialEq)]
 enum IpccChannel {
     Channel1,
     Channel2,
@@ -251,7 +243,7 @@ fn ipcc_notify_cpu(channel: IpccChannel, direction: IpccDirection) {
     let peripherals = unsafe { target::Peripherals::steal() };
     let ipcc = &peripherals.IPCC;
 
-    ipcc.c2scr.modify(|r, w| match direction {
+    ipcc.c2scr.modify(|_r, w| match direction {
         IpccDirection::Tx => match channel {
             IpccChannel::Channel1 => w.ch1s().set_bit(),
             IpccChannel::Channel2 => w.ch2s().set_bit(),
@@ -272,14 +264,12 @@ fn main() -> ! {
     let mut core_peripherals = unsafe { target::CorePeripherals::steal() };
     let peripherals = unsafe { target::Peripherals::steal() };
 
-
+    // Enabling clocks for the HSEM and IPCC
     peripherals.RCC
         .rcc_mc_ahb3ensetr
         .write(|w|
             w
-                // Enable clock for the HSEM block
                 .hsemen().set_bit()
-                // Enable clock for the IPCC
                 .ipccen().set_bit()
         );
     // Enable clock for the GPIO
@@ -287,52 +277,27 @@ fn main() -> ! {
         .rcc_mc_ahb4ensetr
         .write(|w| w.gpioden().set_bit());
 
-    // TODO: put in other function
-    // Setup the LED7 on the devboard
-    // TODO: rename `i` to `LED7` or something
-    let i = 7;
-    let offset = 2 * i;
-    peripherals.GPIOH
+    // Enable the LED7 on the devboard
+    let led_bank = peripherals.GPIOH;
+    let led_pin = 7;
+    let offset = 2 * led_pin;
+    led_bank
         .gpiox_pupdr
         .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)) } );
-    peripherals.GPIOH
+    led_bank
         .gpiox_otyper
-        .modify(|r, w| unsafe { w.bits(r.bits() & !(0b1 << i)) } );
-    peripherals.GPIOH
+        .modify(|r, w| unsafe { w.bits(r.bits() & !(0b1 << led_pin)) } );
+    led_bank
         .gpiox_moder
         .modify(|r, w| unsafe { w.bits((r.bits() & !(0b11 << offset)) | (0b01 << offset)) } );
-    peripherals.GPIOH
+    led_bank
         .gpiox_bsrr
-        .write(|w| unsafe { w.bits(0 << i) } );
-
-    writeln!(t, "Setup complete. Booting {:?}", version::version()).unwrap();
+        .write(|w| unsafe { w.bits(0 << led_pin) } );
 
     // Turn on the LED7
-    peripherals.GPIOH
+    led_bank
         .gpiox_bsrr
-        .write(|w| unsafe { w.bits(1 << i) } );
-
-    // Configure vrings
-
-    // This vring is full of available buffers we can use to send
-    // data back to the host.
-    let ipu_to_host = unsafe {
-        vring::GuestVring::new(
-            0x10040000,
-            RESOURCE_TABLE.rpmsg_vring0.num,
-            RESOURCE_TABLE.rpmsg_vring0.align,
-        )
-    };
-
-    // This vring containers buffers the host wishes us to look at and do
-    // something with.
-    let host_to_ipu = unsafe {
-        vring::GuestVring::new(
-            0x10041000,
-            RESOURCE_TABLE.rpmsg_vring1.num,
-            RESOURCE_TABLE.rpmsg_vring1.align,
-        )
-    };
+        .write(|w| unsafe { w.bits(1 << led_pin) } );
 
     // Spin until status is OK
     const BUFS_PRIMED: u8 = vring::VIRTIO_CONFIG_S_ACKNOWLEDGE
@@ -341,7 +306,7 @@ fn main() -> ! {
     let status_ptr = &RESOURCE_TABLE.rpmsg_vdev.status as *const u8;
     loop {
         // Volatile read as we're in a loop
-        let status = unsafe { ::core::ptr::read_volatile(status_ptr) };
+        let status = unsafe { core::ptr::read_volatile(status_ptr) };
         writeln!(t, "Buffer status is {}", status).unwrap();
         if status == BUFS_PRIMED {
             break;
@@ -352,9 +317,32 @@ fn main() -> ! {
         }
     }
 
+    // Configure vrings
+
+    // This vring is full of available buffers we can use to send
+    // data back to the host.
+    let ipu_to_host = unsafe {
+        vring::GuestVring::new(
+            core::ptr::read_volatile(&RESOURCE_TABLE.rpmsg_vring0.da),
+            RESOURCE_TABLE.rpmsg_vring0.num,
+            RESOURCE_TABLE.rpmsg_vring0.align,
+        )
+    };
+
+    // This vring containers buffers the host wishes us to look at and do
+    // something with.
+    let host_to_ipu = unsafe {
+        vring::GuestVring::new(
+            core::ptr::read_volatile(&RESOURCE_TABLE.rpmsg_vring1.da),
+            RESOURCE_TABLE.rpmsg_vring1.num,
+            RESOURCE_TABLE.rpmsg_vring1.align,
+        )
+    };
+
+
     // Prepare the rpmsg transport interface
     let mut transport = rpmsg::Transport::new(ipu_to_host, host_to_ipu);
-    let res = register_proto(&mut transport);
+    let res = register_tty_channel(&mut transport);
     writeln!(t, "Registered proto {:?}", res).unwrap();
     writeln!(t, "Transport is now: \n{:#?}", transport).unwrap();
 
@@ -363,54 +351,17 @@ fn main() -> ! {
     // Enable interrupts for IPCC RX
     core_peripherals.NVIC.enable(target::Interrupt::IPCC_RX1);
 
-    let mut loops: u32 = 0;
     loop {
-        loops = loops.wrapping_add(1);
         let popped = cortex_m::interrupt::free(|_cs| unsafe { MAILBOX_FIFO.pop() });
-        if let Some(msg) = popped {
-            let res_rx = transport.receive(|mut tx, header, payload| {
-                writeln!(t, "Got: {:?}, {:x?}", header, payload).unwrap();
+        if popped.is_some() {
+            let _ = transport.receive(| _tx, header, payload| {
+                // Skip the framing message
+                if header.length == 2 && payload == ['\r' as u8, '\n' as u8] {
+                    return
+                }
+                // Print the received message
+                writeln!(t, "Got: {:?}, {}", header, core::str::from_utf8(payload).unwrap()).unwrap();
             });
-//            match msg {
-//                rpmsg::MBOX_READY => {
-//                    writeln!(t, "{}: Ready received.", loops).unwrap();
-//                }
-//                rpmsg::MBOX_ECHO_REQUEST => {
-//                    writeln!(t, "{}: Echo request received, sending reply.", loops).unwrap();
-//                    chip.send_message(rpmsg::MBOX_ECHO_REPLY, TX_MAILBOX);
-//                }
-//                1 => {
-//                    let res_rx = transport.receive(|mut tx, _header, _payload| {
-//                        // writeln!(t, "Got: {:?}, {:x?}", _header, _payload).unwrap();
-//                        let mut buffer = [0u8; 64];
-//                        {
-//                            let mut writer = BufferWriter::new(&mut buffer);
-//                            write!(writer, "Response to message {}", loops).unwrap();
-//                        }
-//                        tx.send(REMOTE_ID, HOST_ID, &buffer)
-//                            .expect("Failed to send");
-//                        chip.send_message(0, TX_MAILBOX);
-//                    });
-//                    match res_rx {
-//                        Ok(()) => {
-//                            // writeln!(t, "{}: Message processed", loops).unwrap();
-//                        }
-//                        Err(rpmsg::Error::Empty) => {
-//                            writeln!(t, "{}: Queue empty??", loops).unwrap();
-//                        }
-//                        Err(e) => {
-//                            writeln!(t, "{}: Transport error: {:?}", loops, e).unwrap();
-//                        }
-//                    }
-//                }
-//                0 => {
-//                    // Ignore - letting us know about space on the to-host ring
-//                    // writeln!(t, "{}: Ignoring space indication.", loops).unwrap();
-//                }
-//                m => {
-//                    writeln!(t, "{}: Unexpected message ID 0x{:08x}.", loops, m).unwrap();
-//                }
-//            }
         } else {
             // Wait for stuff to happen...
             cortex_m::asm::wfe();
@@ -419,15 +370,14 @@ fn main() -> ! {
 }
 
 /// Register an rpmsg protocol
-fn register_proto(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::Error>
+fn register_tty_channel(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::Error>
 {
     let msg = rpmsg::NameServiceAnnounce::new(
         "rpmsg-tty-channel",
-        "rpmsg-tty-channel",
-        0x10040000,
+        0x00,
         rpmsg::NameServiceAnnounceFlags::Create,
     );
-    let res = transport.send(1, 0, &msg);
+    let res = transport.send(0x00, 0x35, &msg);
 
     let peripherals = unsafe { target::Peripherals::steal() };
     peripherals.IPCC
@@ -452,6 +402,7 @@ fn IPCC_RX1() {
         IpccChannel::Channel1,
         IpccChannel::Channel2,
     ].iter() {
+
         let rx_status = ipcc_get_channel_status(*channel, IpccDirection::Rx);
 
         if rx_status == IpccStatus::Occupied {
@@ -459,15 +410,12 @@ fn IPCC_RX1() {
             ipcc_mask_channel(*channel, IpccDirection::Rx);
 
             // Retrieve the data here
-            unsafe { MAILBOX_FIFO.push(1) };
-
-            let mut t = unsafe { trace::steal_trace() };
-            let _ = writeln!(t, "Retrieving data");
+            unsafe { MAILBOX_FIFO.push(PhantomData) };
 
             // Notify the CPU that the channel is free
             ipcc_notify_cpu(*channel, IpccDirection::Rx);
-//            ipcc_set_channel_status(channel, IpccDirection::Rx, IpccStatus::Free);
-            ipcc_mask_channel(*channel, IpccDirection::Rx);
+           // ipcc_set_channel_status(channel, IpccDirection::Rx, IpccStatus::Free);
+            ipcc_unmask_channel(*channel, IpccDirection::Rx);
         }
     }
 }
@@ -481,48 +429,4 @@ pub fn panic(info: &PanicInfo) -> ! {
     loop {}
 }
 
-//impl<'a> BufferWriter<'a> {
-//    fn new(buf: &'a mut [u8]) -> Self {
-//        BufferWriter {
-//            buf: buf,
-//            offset: 0,
-//        }
-//    }
-//}
-//
-///// From https://stackoverflow.com/questions/39488327/how-to-write-an-integer-as-a-string-to-a-byte-array-with-no-std
-//impl<'a> ::core::fmt::Write for BufferWriter<'a> {
-//    fn write_str(&mut self, s: &str) -> ::core::fmt::Result {
-//        let bytes = s.as_bytes();
-//        let buffer_len = self.buf.len();
-//        let space = &mut self.buf[self.offset..];
-//        let to_fill = &mut space[..bytes.len()];
-//        to_fill.copy_from_slice(bytes);
-//
-//        self.offset += bytes.len().min(buffer_len);
-//
-//        Ok(())
-//    }
-//}
 
-impl<T> Fifo<T>
-where
-    T: Copy,
-{
-    pub fn push(&mut self, data: T) {
-        let write_idx = self.write as usize % self.storage.len();
-        self.storage[write_idx] = data;
-        self.write = self.write.wrapping_add(1);
-    }
-
-    pub fn pop(&mut self) -> Option<T> {
-        if self.read == self.write {
-            None
-        } else {
-            let read_idx = self.read as usize % self.storage.len();
-            let data = self.storage[read_idx];
-            self.read = self.read.wrapping_add(1);
-            Some(data)
-        }
-    }
-}
