@@ -1,11 +1,15 @@
 #![no_main]
 #![no_std]
+#![feature(core_intrinsics, ptr_offset_from, const_raw_ptr_deref, const_ptr_offset_from)]
+
 
 #[macro_use]
 extern crate cortex_m;
 extern crate cortex_m_rt;
 extern crate volatile_register;
 extern crate openamp;
+#[macro_use]
+extern crate memoffset;
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
@@ -27,14 +31,21 @@ mod rpmsg_virtio;
 
 use openamp::vring;
 
+mod ipcc;
+
 mod string;
 
 mod fifo;
 use fifo::Fifo;
 
+
+// Setting up the resource table
+/// We have a VDev and a Trace entry; the two VRings are children of the VDev
+const NUM_ENTRIES: usize = 2;
 #[repr(C)]
 #[derive(Debug)]
-pub struct ResourceTable {
+/// Definition of the resource table structure
+struct ResourceTable {
     base: rt::Header,
     offsets: [usize; NUM_ENTRIES],
     rpmsg_vdev: rt::Vdev,
@@ -45,14 +56,17 @@ pub struct ResourceTable {
 
 #[link_section = ".resource_table"]
 #[no_mangle]
-pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
+static RESOURCE_TABLE: ResourceTable = ResourceTable {
     base: rt::Header {
         ver: 1,
         num: NUM_ENTRIES,
         reserved: [0, 0],
     },
-    // We don't have an offsetof macro so we have to calculate these by hand
-    offsets: [SZ_RT_HEADER, SZ_RT_HEADER + 68],
+
+    offsets: [
+        offset_of!(ResourceTable, rpmsg_vdev),
+        offset_of!(ResourceTable, trace)
+    ],
 
     rpmsg_vdev: rt::Vdev {
         rtype: rt::ResourceType::VDEV,
@@ -67,6 +81,7 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
     },
 
     /// vring0 is for rproc-to-Linux comms
+    /// Set the address to an invalid value, will be rewritten by Linux
     rpmsg_vring0: rt::VdevVring {
         da: 0xffffffff,
         align: 16,
@@ -76,6 +91,7 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
     },
 
     /// vring1 is for Linux-to-rproc comms
+    /// Set the address to an invalid value, will be rewritten by Linux
     rpmsg_vring1: rt::VdevVring {
         da: 0xffffffff,
         align: 16,
@@ -99,161 +115,6 @@ pub static RESOURCE_TABLE: ResourceTable = ResourceTable {
     },
 };
 
-#[doc(hidden)]
-#[link_section = ".vector_table.reset_vector_stm32mp1"]
-#[no_mangle]
-pub static __RESET_VECTOR_STM32MP1: unsafe extern "C" fn() -> ! = ResetSTM32MP1;
-
-extern "C" {
-    fn Reset() -> !;
-}
-
-#[allow(non_snake_case)]
-pub unsafe extern "C" fn ResetSTM32MP1() -> ! {
-    Reset();
-}
-
-const NUM_ENTRIES: usize = 2;
-const SZ_RT_HEADER: usize = core::mem::size_of::<rt::Header>() + (NUM_ENTRIES * 4);
-
-static mut MAILBOX_FIFO: Fifo<PhantomData<u8>> = Fifo {
-    storage: [PhantomData; fifo::FIFO_SIZE],
-    read: 0,
-    write: 0,
-};
-
-// ****************************************************************************
-//
-// Public Functions
-//
-// ****************************************************************************
-
-fn init_ipcc() {
-    let peripherals = unsafe { target::Peripherals::steal() };
-
-    // Initializing IPCC
-    // Enable TX and RX interrupts for both channels
-    peripherals.IPCC.c2cr.write_with_zero(|w|
-        w
-        .txfie().set_bit()
-        .rxoie().set_bit()
-    );
-
-    // Set channels free
-    // TODO: modify PAC to add other channels
-    peripherals.IPCC.c2scr.write(|w|
-        w
-        .ch1c().set_bit()
-        .ch2c().set_bit()
-    );
-
-    // Unmask TX and RX interrupt on both available channels
-    // TODO: there should be 6 channels, there is only 2 in the PAC, fix that
-    peripherals.IPCC.c2mr.write(|w|
-        w
-        .ch1om().clear_bit()
-        .ch2om().clear_bit()
-        .ch1fm().clear_bit()
-        .ch2fm().clear_bit()
-    );
-}
-
-
-// TODO: add other channels
-#[derive(Debug,Copy,Clone,PartialEq)]
-enum IpccChannel {
-    Channel1,
-    Channel2,
-}
-
-#[derive(Copy,Clone,PartialEq)]
-enum IpccDirection {
-    Tx,
-    Rx,
-}
-
-#[derive(Copy,Clone,PartialEq)]
-enum IpccStatus {
-    Free,
-    Occupied,
-}
-
-fn ipcc_unmask_channel(channel: IpccChannel, direction: IpccDirection) {
-    let peripherals = unsafe { target::Peripherals::steal() };
-    let mask_reg = &peripherals.IPCC.c2mr;
-
-    match direction {
-        IpccDirection::Tx => {
-            match channel {
-                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1fm().clear_bit()),
-                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2fm().clear_bit()),
-            }
-        },
-        IpccDirection::Rx => {
-            match channel {
-                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1om().clear_bit()),
-                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2om().clear_bit()),
-            }
-        }
-    }
-}
-
-fn ipcc_mask_channel(channel: IpccChannel, direction: IpccDirection) {
-    let peripherals = unsafe { target::Peripherals::steal() };
-    let mask_reg = &peripherals.IPCC.c2mr;
-
-    match direction {
-        IpccDirection::Tx => {
-            match channel {
-                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1fm().set_bit()),
-                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2fm().set_bit()),
-            }
-        },
-        IpccDirection::Rx => {
-            match channel {
-                IpccChannel::Channel1 => mask_reg.write(|w| w.ch1om().set_bit()),
-                IpccChannel::Channel2 => mask_reg.write(|w| w.ch2om().set_bit()),
-            }
-        }
-    }
-}
-
-fn ipcc_get_channel_status(channel: IpccChannel, direction: IpccDirection) -> IpccStatus {
-    let peripherals = unsafe { target::Peripherals::steal() };
-    let ipcc = &peripherals.IPCC;
-
-    let status = match direction {
-        IpccDirection::Tx => match channel {
-                IpccChannel::Channel1 => ipcc.c2toc1sr.read().ch1f().bit(),
-                IpccChannel::Channel2 => ipcc.c2toc1sr.read().ch2f().bit(),
-        },
-        IpccDirection::Rx => match channel {
-                IpccChannel::Channel1 => ipcc.c1toc2sr.read().ch1f().bit(),
-                IpccChannel::Channel2 => ipcc.c1toc2sr.read().ch2f().bit(),
-        },
-    };
-
-    match status {
-        true => IpccStatus::Occupied,
-        false => IpccStatus::Free,
-    }
-}
-
-fn ipcc_notify_cpu(channel: IpccChannel, direction: IpccDirection) {
-    let peripherals = unsafe { target::Peripherals::steal() };
-    let ipcc = &peripherals.IPCC;
-
-    ipcc.c2scr.modify(|_r, w| match direction {
-        IpccDirection::Tx => match channel {
-            IpccChannel::Channel1 => w.ch1s().set_bit(),
-            IpccChannel::Channel2 => w.ch2s().set_bit(),
-        },
-        IpccDirection::Rx => match channel {
-            IpccChannel::Channel1 => w.ch1c().set_bit(),
-            IpccChannel::Channel2 => w.ch2c().set_bit(),
-        },
-    });
-}
 
 #[entry]
 fn main() -> ! {
@@ -318,9 +179,7 @@ fn main() -> ! {
     }
 
     // Configure vrings
-
-    // This vring is full of available buffers we can use to send
-    // data back to the host.
+    // This vring is full of available buffers we can use to send data back to the host.
     let ipu_to_host = unsafe {
         vring::GuestVring::new(
             core::ptr::read_volatile(&RESOURCE_TABLE.rpmsg_vring0.da),
@@ -329,8 +188,7 @@ fn main() -> ! {
         )
     };
 
-    // This vring containers buffers the host wishes us to look at and do
-    // something with.
+    // This vring containers buffers the host wishes us to look at and do something with.
     let host_to_ipu = unsafe {
         vring::GuestVring::new(
             core::ptr::read_volatile(&RESOURCE_TABLE.rpmsg_vring1.da),
@@ -342,11 +200,15 @@ fn main() -> ! {
 
     // Prepare the rpmsg transport interface
     let mut transport = rpmsg::Transport::new(ipu_to_host, host_to_ipu);
-    let res = register_tty_channel(&mut transport);
-    writeln!(t, "Registered proto {:?}", res).unwrap();
+    register_tty_channel(&mut transport, 0).unwrap();
+    register_tty_channel(&mut transport, 1).unwrap();
+    register_tty_channel(&mut transport, 2).unwrap();
+    register_tty_channel(&mut transport, 3).unwrap();
+    register_tty_channel(&mut transport, 4).unwrap();
+    register_tty_channel(&mut transport, 5).unwrap();
     writeln!(t, "Transport is now: \n{:#?}", transport).unwrap();
 
-    init_ipcc();
+    ipcc::init_ipcc();
 
     // Enable interrupts for IPCC RX
     core_peripherals.NVIC.enable(target::Interrupt::IPCC_RX1);
@@ -370,14 +232,14 @@ fn main() -> ! {
 }
 
 /// Register an rpmsg protocol
-fn register_tty_channel(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::Error>
+fn register_tty_channel(transport: &mut rpmsg::Transport, channel: u32) -> Result<(), rpmsg::Error>
 {
     let msg = rpmsg::NameServiceAnnounce::new(
         "rpmsg-tty-channel",
-        0x00,
+        channel,
         rpmsg::NameServiceAnnounceFlags::Create,
     );
-    let res = transport.send(0x00, 0x35, &msg);
+    let res = transport.send(channel, rpmsg::RPMSG_NS_EPT_ADDR, &msg);
 
     let peripherals = unsafe { target::Peripherals::steal() };
     peripherals.IPCC
@@ -392,41 +254,61 @@ fn register_tty_channel(transport: &mut rpmsg::Transport) -> Result<(), rpmsg::E
         .c2scr
         .write(|w| w.ch1s().set_bit());
 
-    ipcc_notify_cpu(IpccChannel::Channel1, IpccDirection::Tx);
+    ipcc::ipcc_notify_cpu(ipcc::IpccChannel::Channel1, ipcc::IpccDirection::Tx);
     res
 }
+
+
+static mut MAILBOX_FIFO: Fifo<PhantomData<u8>> = Fifo {
+    storage: [PhantomData; fifo::FIFO_SIZE],
+    read: 0,
+    write: 0,
+};
 
 #[interrupt]
 fn IPCC_RX1() {
     for channel in [
-        IpccChannel::Channel1,
-        IpccChannel::Channel2,
+        ipcc::IpccChannel::Channel1,
+        ipcc::IpccChannel::Channel2,
     ].iter() {
 
-        let rx_status = ipcc_get_channel_status(*channel, IpccDirection::Rx);
+        let rx_status = ipcc::ipcc_get_channel_status(*channel, ipcc::IpccDirection::Rx);
 
-        if rx_status == IpccStatus::Occupied {
+        if rx_status == ipcc::IpccStatus::Occupied {
             // Mask the interrupt
-            ipcc_mask_channel(*channel, IpccDirection::Rx);
+            ipcc::ipcc_mask_channel(*channel, ipcc::IpccDirection::Rx);
 
             // Retrieve the data here
             unsafe { MAILBOX_FIFO.push(PhantomData) };
 
             // Notify the CPU that the channel is free
-            ipcc_notify_cpu(*channel, IpccDirection::Rx);
+            ipcc::ipcc_notify_cpu(*channel, ipcc::IpccDirection::Rx);
            // ipcc_set_channel_status(channel, IpccDirection::Rx, IpccStatus::Free);
-            ipcc_unmask_channel(*channel, IpccDirection::Rx);
+            ipcc::ipcc_unmask_channel(*channel, ipcc::IpccDirection::Rx);
         }
     }
 }
 
-
+// Setting up the panic handler
 #[panic_handler]
 #[inline(never)]
 pub fn panic(info: &PanicInfo) -> ! {
     let mut t = unsafe { trace::steal_trace() };
-    let _ = writeln!(t, "*** SYSTEM PANIC!: {:?}", info);
+    writeln!(t, "*** SYSTEM PANIC!: {:?}", info).unwrap();
     loop {}
 }
 
+// Setting up the reset vector
+#[doc(hidden)]
+#[link_section = ".vector_table.reset_vector_stm32mp1"]
+#[no_mangle]
+pub static __RESET_VECTOR_STM32MP1: unsafe extern "C" fn() -> ! = ResetSTM32MP1;
 
+extern "C" {
+    fn Reset() -> !;
+}
+
+#[allow(non_snake_case)]
+pub unsafe extern "C" fn ResetSTM32MP1() -> ! {
+    Reset();
+}

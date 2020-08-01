@@ -1,6 +1,8 @@
 #![allow(dead_code)]
 
 
+pub const RPMSG_NS_EPT_ADDR: u32 = 0x35;
+
 pub use super::string::String32;
 use openamp::vring;
 //use alloc::collections::LinkedList;
